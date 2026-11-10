@@ -11,6 +11,162 @@ techniques, les paliers et les chiffres ci-dessous sont des propositions à affi
 Les rôles sont une progression fictive pour le jeu, pas une description officielle
 du fonctionnement des associations de l’école.
 
+## Consignes du projet NoSQL — priorité de conception
+
+Source : [sujet du projet NoSQL](https://leperuvienn.github.io/notes-cours/S3/NSQL/Projet/),
+consulté le 12 novembre 2026. Les exigences de cette section priment sur les idées
+optionnelles de gameplay. Le sujet indique le 13 novembre pour la publication sur
+GitHub et le 19 novembre pour la soutenance, sans préciser l’année dans son texte.
+
+| Exigence du sujet | Réponse du projet | Preuve à préparer |
+| --- | --- | --- |
+| Équipe de 2 ou 3 | Renseigner les membres dans le README et le tableau du cours | Noms et URL du dépôt |
+| Application Web avec formulaire | Fiche d’iiens : pseudo, asso et présentation libre | Saisie depuis le navigateur |
+| Données saisies persistées dans au moins deux systèmes proposés | PostgreSQL et MongoDB conservent les mêmes champs de la fiche | Retrouver une saisie identifiable dans les deux terminaux |
+| Docker Compose, au moins 3 conteneurs | `web`, `api`, `postgres`, `mongo`, plus `init` à exécution unique | `docker compose up` depuis un clone neuf |
+| Dépôt GitHub | Publier le code, le lockfile, Compose et la documentation | Clone public ou accès donné à l’enseignant |
+| Connexion aux deux bases | Fournir les commandes `psql` et `mongosh` via Compose | Consultation directe des enregistrements |
+| Déploiement sur un serveur | Installer la même application sur un hébergement distant | URL joignable et partie jouable |
+| Restitution et présentation | Démonstration courte, reproductible, sans attendre plusieurs jours | Scénario de soutenance documenté |
+
+Le langage serveur est libre. PostgreSQL et MongoDB figurent tous deux dans la
+liste autorisée : Redis, Neo4j et Elasticsearch ne sont pas nécessaires.
+La seule présence de MongoDB pour le catalogue ne démontre pas la persistance
+des saisies utilisateur dans deux systèmes : la fiche décrite ci-dessous est obligatoire.
+
+### Formulaire obligatoire : la fiche d’iiens
+
+À la première visite, le joueur crée sa fiche avec :
+
+- un pseudo de 2 à 32 caractères ;
+- une association de départ parmi LeBar(c), Bakaclub et ARISE ;
+- une présentation libre de 10 à 500 caractères : « Pourquoi tu rejoins cette asso ? ».
+
+Ce choix représente son asso visée : le joueur commence toujours au rôle « simple
+élève » et devient membre lors de la première promotion. Le BdE est la destination
+de la progression, pas un choix permettant de sauter les premiers paliers.
+La présentation est réutilisée dans la fiche et le bilan de campagne. Le formulaire
+peut être modifié pour le pseudo et la présentation ; changer d’asso suit les règles
+du jeu. Aucune adresse mail ni identité réelle n’est nécessaire. La partie est solo,
+sans profil public, classement, vote entre joueurs ou messagerie.
+
+Valider les champs côté API, retirer les espaces aux extrémités et afficher le texte
+comme du texte, jamais comme du HTML. Chaque révision reçoit un identifiant commun
+aux deux bases et une date serveur. L’API ne prend jamais un identifiant de joueur
+fourni par le navigateur comme preuve de propriété : elle utilise la session.
+
+### Persistance des saisies dans les deux bases
+
+PostgreSQL reste la référence transactionnelle. Une soumission de formulaire écrit
+dans une seule transaction :
+
+1. la fiche courante dans `player_profiles` ;
+2. la révision immuable dans `profile_submissions` ;
+3. une tâche de réplication dans `outbox_events`, portant les mêmes données.
+
+MongoDB conserve une collection `student_profiles` avec un document par révision :
+`submissionId`, `playerId`, `revision`, `nickname`, `associationId`, `presentation`,
+`createdAt`. Un index unique sur `submissionId` empêche les doublons. Il conserve
+aussi le catalogue de jeu. Cette copie sert réellement à lire l’historique de la
+fiche, avec ses présentations successives, depuis l’interface.
+
+Une boucle interne à l’API traite les tâches d’outbox, au démarrage puis à intervalles
+courts. Elle effectue un upsert idempotent dans MongoDB, puis marque la tâche comme
+livrée dans PostgreSQL. Un arrêt entre ces deux opérations provoque une nouvelle
+tentative sans doublon. La révision courante est déterminée par son numéro, jamais
+par l’ordre d’arrivée des tâches. Pas de Redis ou de nouveau service nécessaire.
+
+Le formulaire affiche « Enregistrement en cours » tant que les deux écritures ne
+sont pas confirmées, puis « Fiche enregistrée ». En cas d’indisponibilité de MongoDB,
+la saisie PostgreSQL et la tâche restent conservées ; l’interface indique le retard
+et propose de réessayer la consultation. Ne pas prétendre qu’une transaction couvre
+les deux moteurs : la réplication est à cohérence éventuelle et récupérable.
+Le statut d’enregistrement est vérifiable par la session propriétaire.
+
+Pour une nouvelle soumission, le client conserve une clé d’idempotence jusqu’à
+confirmation ; un renvoi réseau ne crée pas une autre révision. La réponse confirme
+la prise en compte dans PostgreSQL et le statut de réplication, sans exposer la file.
+
+### Démonstration obligatoire des bases
+
+Les commandes suivantes définissent le contrat de la future configuration Compose :
+base et utilisateur PostgreSQL `cliicker`, base MongoDB `cliicker`, variables
+d’authentification internes aux conteneurs. Elles seront vérifiées à l’implémentation.
+
+```sh
+docker compose up
+docker compose exec postgres psql -U cliicker -d cliicker
+```
+
+Dans le terminal PostgreSQL :
+
+```sql
+SELECT submission_id, nickname, association_id, presentation, revision
+FROM profile_submissions
+ORDER BY created_at DESC LIMIT 5;
+```
+
+Dans un second terminal :
+
+```sh
+docker compose exec mongo sh -lc 'mongosh --username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin cliicker'
+```
+
+Dans le terminal MongoDB :
+
+```javascript
+db.student_profiles.find({}, {
+  _id: 0, submissionId: 1, nickname: 1, associationId: 1,
+  presentation: 1, revision: 1
+}).sort({createdAt: -1}).limit(5)
+```
+
+Créer une fiche avec un texte reconnaissable, attendre la confirmation et retrouver
+le même identifiant de soumission et les mêmes champs dans les deux résultats.
+Modifier la présentation et vérifier la nouvelle révision dans les deux bases.
+Redémarrer avec `docker compose restart`, puis vérifier que les données sont encore
+présentes. Ne pas utiliser `down -v`, qui supprimerait les volumes.
+
+### Livraison et ordre de priorité du sujet
+
+1. **Tranche obligatoire complète** : formulaire, écritures dans les deux bases,
+   lecture de l’historique MongoDB, Compose, volumes et commandes de vérification.
+2. **Jeu solo minimal** : clics, gains passifs, achats, projets, sauvegarde et sept
+   paliers jusqu’au BdE. Garder LeBar(c), Bakaclub et ARISE dès cette tranche.
+3. **Livraison pédagogique** : README, dépôt GitHub, serveur déployé, accès Web et
+   démonstration vérifiée depuis un clone neuf. Ne pas attendre tous les bonus de jeu.
+4. **Enrichissement** : équipiers, événements, dialogues, succès et campagne détaillée,
+   tant qu’ils ne compromettent pas les points précédents.
+
+Le README doit fournir les prérequis, le lancement exact, le port Web, le modèle de
+données, le rôle de chaque base, les commandes ci-dessus, les tests et les limites.
+Compose doit construire les images locales automatiquement avec `docker compose up`
+et initialiser les bases sans manipulation manuelle. Fournir des valeurs locales de
+démonstration utilisables au clonage ; les secrets du serveur sont distincts, injectés
+hors Git. Seul le port Web est exposé, les deux bases restent sur le réseau interne.
+
+Pour la soutenance, prévoir une configuration de démonstration explicitement séparée,
+sur des volumes dédiés, permettant d’explorer rapidement les promotions. La campagne
+normale reste sur plusieurs jours. Aucun paramètre HTTP ne doit accélérer une partie
+normale ou donner accès aux sauvegardes d’autres sessions.
+
+À obtenir avant publication et déploiement : membres de l’équipe, destination GitHub,
+hôte distant et accès autorisé. Ces informations ne bloquent pas le travail local.
+Le dépôt local seul ne remplit pas l’obligation GitHub ; un Compose local seul ne
+remplit pas l’obligation de déploiement sur serveur.
+
+### Tests de conformité à prévoir
+
+- Une saisie valide est présente avec les mêmes valeurs et la même révision dans les deux bases.
+- Une saisie invalide n’est écrite dans aucune base.
+- Un nouvel envoi de la même requête ne duplique pas la révision.
+- Une panne MongoDB après l’écriture PostgreSQL est récupérée par l’outbox au retour du service.
+- Un arrêt après l’upsert MongoDB et avant l’acquittement ne crée pas de doublon.
+- Une ancienne révision livrée tardivement ne remplace pas une révision plus récente.
+- Le formulaire et son historique sont isolés par session.
+- Les volumes survivent à un redémarrage et le parcours fonctionne depuis un clone neuf.
+- L’URL du serveur permet de saisir puis de retrouver la fiche dans les deux bases distantes.
+
 ## Contraintes fixées
 
 - Application Web lancée avec Docker Compose.
@@ -18,13 +174,13 @@ du fonctionnement des associations de l’école.
 - Univers ENSIIE et vie associative étudiante.
 - Progression de simple élève à prez du BdE.
 - Progression sur plusieurs jours, avec des sessions courtes et des activités variées.
-- Première étape : planifier le projet avant de développer l’application.
+- Respecter le sujet NoSQL ci-dessus avant d’ajouter des fonctionnalités optionnelles.
 
 ## Première version jouable
 
 Un jeu solo avec une sauvegarde persistante et une campagne visant 7 à 10 jours.
-Le prototype commence avec une association fictive ; la première version complète
-offre trois spécialités d’association et une même échelle de responsabilités.
+Les associations de départ sont LeBar(c), Bakaclub et ARISE ; le BdE est rejoint
+plus tard, au fil d’une même échelle de responsabilités.
 Pas de multijoueur, de classement ou de système de prestige dans cette version.
 Le calendrier est une cible d’équilibrage, pas un verrou imposant d’attendre un jour réel.
 
@@ -77,8 +233,9 @@ L’élection finale sera un objectif déterministe dans le MVP, sans vote multi
 Pour le prototype technique, les projets ont une récompense immédiate. La première
 version complète ajoute les projets chronométrés et les événements à choix décrits
 ci-dessous. Le prototype sert à vérifier la boucle ; il ne représente pas toute l’expérience.
-Utiliser des noms fictifs tant que les références aux vraies associations ne sont
-pas définies. Le ton est étudiant et humoristique, sans viser de personnes réelles.
+Utiliser les noms LeBar(c), Bakaclub, ARISE et BdE demandés par le porteur du projet.
+Les personnages et scénarios restent fictifs. Le ton est étudiant et humoristique,
+sans viser de personnes réelles ni présenter le jeu comme officiel.
 
 ## Architecture proposée
 
@@ -95,8 +252,8 @@ et à calculer les gains, les achats et les promotions.
 
 | Base | Données | Raison |
 | --- | --- | --- |
-| PostgreSQL | Joueurs, sessions, sauvegardes, soldes, améliorations possédées, projets terminés et promotions | Transactions et cohérence de la progression |
-| MongoDB | Catalogue versionné des rôles, améliorations, projets et événements | Documents aux conditions et effets variables |
+| PostgreSQL | Fiches saisies, révisions, outbox, joueurs, sessions, sauvegardes et progression | Transactions et cohérence de la progression |
+| MongoDB | Révisions des fiches saisies et catalogue versionné des rôles, améliorations, projets et événements | Historique documentaire des saisies et contenu variable |
 
 MongoDB est réellement utilisé : l’API y charge les règles et le contenu nécessaires
 à une partie. Le catalogue initial est chargé par une commande de seed reproductible.
@@ -105,13 +262,17 @@ Un catalogue incomplet empêche la création d’une partie avec un message expl
 Chaque partie référence une version immuable du catalogue et des identifiants
 stables de contenu. Les anciennes versions utilisées par des sauvegardes sont
 conservées. Une validation vérifie les références avant de publier un catalogue.
-Les opérations de jeu écrivent uniquement dans PostgreSQL : elles n’ont pas besoin
-d’une transaction distribuée entre les deux bases.
+Les opérations économiques du jeu écrivent uniquement dans PostgreSQL. Les saisies
+du formulaire sont répliquées dans MongoDB par l’outbox décrite plus haut, sans
+transaction distribuée entre les deux bases.
 
 ### Modèle de données minimal
 
 PostgreSQL :
 
+- `player_profiles` : fiche courante de l’iiens.
+- `profile_submissions` : révisions immuables des champs saisis, avec identifiant partagé.
+- `outbox_events` : soumissions à répliquer, tentatives et date de livraison.
 - `players` : identité anonyme du joueur.
 - `sessions` : empreinte du jeton de session et expiration.
 - `game_states` : joueur, version du catalogue, rôle, implication, réputation,
@@ -128,6 +289,7 @@ PostgreSQL :
 
 MongoDB :
 
+- `student_profiles` : documents des révisions de fiches, index unique `submissionId`.
 - `catalog_versions` : version, état de validation et métadonnées.
 - `roles` : ordre, conditions et contenu débloqué.
 - `upgrades` : coûts, progression des prix et effets.
@@ -162,6 +324,9 @@ effets suivent un schéma validé, sans exécution de code fourni par les docume
 | Route | Fonction |
 | --- | --- |
 | `POST /api/session` | Créer ou retrouver une session anonyme |
+| `PUT /api/profile` | Valider la fiche, créer sa révision et sa tâche de réplication |
+| `GET /api/profile/submissions/:id` | Consulter le statut de sa propre soumission |
+| `GET /api/profile/history` | Lire ses révisions depuis MongoDB |
 | `GET /api/game` | Charger la progression et calculer les gains passifs |
 | `GET /api/catalog` | Charger le contenu de la version associée à la partie |
 | `POST /api/clicks` | Envoyer un lot borné de clics |
@@ -182,9 +347,9 @@ d’instances appartiennent à une partie et sont vérifiés côté serveur.
 | Service | Responsabilité |
 | --- | --- |
 | `web` | Servir le frontend compilé et relayer `/api` vers l’API |
-| `api` | Exécuter les règles du jeu et accéder aux bases |
+| `api` | Exécuter les règles du jeu, servir le formulaire et traiter la réplication des fiches |
 | `postgres` | Stocker les sauvegardes dans un volume persistant |
-| `mongo` | Stocker le catalogue dans un volume persistant |
+| `mongo` | Stocker les révisions des fiches et le catalogue dans un volume persistant |
 | `init` | Exécuter les migrations SQL et charger le catalogue avant le démarrage de l’API |
 
 Seul `web` expose un port à l’hôte dans la configuration par défaut. Prévoir des
@@ -193,8 +358,9 @@ de connexion côté API. L’initialisation doit être rejouable sans écraser l
 Les secrets passent par l’environnement ; un `.env.example` documentera les valeurs
 nécessaires. Les versions d’images seront fixées lors de l’implémentation.
 
-Commande cible : `docker compose up --build`. Cette commande n’est pas encore
-disponible : ce dépôt contient pour l’instant le plan, pas l’application.
+Commande exigée à la livraison : `docker compose up` depuis un clone neuf.
+Le socle npm/Vite a été amorcé, mais l’application, le formulaire et Compose ne sont
+pas encore implémentés. Docker n’est pas disponible sur la machine de travail actuelle.
 
 ## Organisation cible du dépôt
 
@@ -215,12 +381,18 @@ db/
 
 ## Étapes de réalisation
 
+Ces étapes décrivent la construction du jeu ; la tranche obligatoire du sujet
+(formulaire, double persistance et Compose) passe avant la progression complète.
+Le dépôt GitHub et le déploiement serveur doivent être livrés dès que cette tranche
+et la boucle minimale fonctionnent, sans attendre la fin des enrichissements.
+
 1. **Cadrage du gameplay.** Partir de la durée cible de 7 à 10 jours, valider les paliers et écrire
    un petit catalogue avec au moins un déblocage par promotion.
    Livrable : tableau des coûts, gains et conditions de progression.
-2. **Socle technique.** Créer le frontend, l’API, Compose, les migrations et le seed.
-   Critère : une installation vierge démarre avec la commande documentée et l’API
-   peut lire les deux bases.
+2. **Socle technique et conformité.** Créer le frontend, l’API, Compose, les migrations,
+   le seed, le formulaire de fiche et sa réplication récupérable.
+   Critère : une installation vierge démarre avec `docker compose up` ; une saisie
+   est lisible dans les deux bases et son historique MongoDB apparaît dans l’interface.
 3. **Première boucle jouable.** Ajouter session, clics, sauvegarde et une amélioration
    passive issue de MongoDB.
    Critère : les gains sont calculés côté serveur et la partie survit à un redémarrage.
@@ -310,14 +482,17 @@ Prévoir une option de réduction des animations et aucun flash rapide.
 
 ### Trois façons de vivre son association
 
-Les noms suivants sont inventés pour le jeu. Le choix donne une couleur au parcours,
-trois projets exclusifs et un bonus modéré ; aucune spécialité ne bloque un palier.
+Les trois associations de départ sont celles demandées par le porteur du projet.
+Leurs activités et bonus ci-dessous sont des propositions de gameplay fictives,
+pas une description officielle. Chaque choix donne trois projets exclusifs et un
+bonus modéré ; aucune spécialité ne bloque un palier.
 
-| Spécialité | Nom de travail fictif | Identité de jeu | Bonus initial à tester |
+| Spécialité de jeu | Association | Identité de jeu | Bonus initial à tester |
 | --- | --- | --- | --- |
-| Tech et jeux | CompIIle & Play | LAN, outils et bidouilles | +10 % de production passive |
-| Culture et création | ScènIIE ouverte | Affiches, scène et improvisation | +10 % de réputation de projets |
-| Sport et entraide | ÉquIIpe solidaire | Tournois et actions collectives | −10 % de durée des projets |
+| Convivialité et organisation | LeBar(c) | Accueil, stand et soirée associative | −10 % de durée des projets |
+| Culture japonaise | Bakaclub | Projection, quiz et événement culturel | +10 % de réputation de projets |
+| Informatique et technique | ARISE | Dépannage, atelier et infrastructure événementielle | +10 % de production passive |
+| Coordination de la vie étudiante | BdE | Projets inter-assos et campagne finale | Débloqué par la progression, sans bonus initial |
 
 Expliquer le bonus avant le choix. Autoriser un changement gratuit au palier
 « prez d’asso », sans perte de progression ; les projets déjà lancés gardent leurs
@@ -392,8 +567,9 @@ Les bonus de spécialité enrichissent une option sans supprimer les autres rép
 En devenant membre du BdE, débloquer un panneau de campagne. Les soutiens sont des
 jalons uniques, pas une troisième monnaie à accumuler indéfiniment.
 
-1. Obtenir trois soutiens parmi cinq collectifs fictifs : tech, culture, sport,
-   entraide et événements. Chaque soutien se gagne avec une mission identifiable.
+1. Obtenir le soutien de LeBar(c), Bakaclub et ARISE. Chaque soutien se gagne avec
+   une mission identifiable, quelle que soit l’association de départ du joueur.
+   Il s’agit d’un mécanisme narratif solo, pas d’un vote de vrais membres d’association.
 2. Donner un nom à sa liste, choisir un emblème prédéfini et deux engagements
    parmi quatre : matériel mutualisé, événements accessibles, accueil des nouveaux,
    simplification de l’organisation.
@@ -481,8 +657,8 @@ textuel, le détail des bonus et la confirmation de sauvegarde.
 - Les récompenses et déblocages sont atomiques avec la résolution d’une action.
   Une seconde récupération du même projet ou soutien ne produit aucun gain.
 - L’API valide les plafonds d’emplacements, affectations et prérequis sous verrou.
-- La consultation recalcule les échéances : aucun cron, Redis ou worker requis
-  pour ces mécaniques dans le MVP.
+- La consultation recalcule les échéances des projets : aucun cron, Redis ou worker
+  de projets requis. La réplication des fiches a sa propre boucle interne à l’API.
 - Un mode de test accéléré agit sur l’horloge injectée du moteur en environnement
   de test ; aucun endpoint public ne permet d’avancer le temps.
 
@@ -490,12 +666,13 @@ textuel, le détail des bonus et la confirmation de sauvegarde.
 
 | Livraison | Contenu | Validation |
 | --- | --- | --- |
-| Prototype | Clics, passif, sauvegarde, un achat et un projet | La boucle fonctionne avec les deux bases et Compose |
+| Tranche obligatoire du sujet | Formulaire, réplication durable, historique, Compose et volumes | Saisies visibles dans PostgreSQL et MongoDB |
+| Prototype jouable | Clics, passif, sauvegarde, un achat et un projet | La boucle fonctionne après création de la fiche |
 | Version jouable sur plusieurs jours | 7 paliers, 3 spécialités, 3 équipiers, 5 familles d’améliorations, 18 projets dont 9 communs et 9 exclusifs, 12 événements, 12 succès et campagne finale | Chaque spécialité peut finir ; retours intéressants et sauvegarde fiable |
 | Après tests | Coup de main, davantage de dialogues, variantes de décor et récupération de compte | Ajouts guidés par les problèmes observés |
-| Plus tard | Nouvelle promo, défis alternatifs, éventuel classement facultatif | Ne retarde pas la première campagne complète |
+| Plus tard | Nouvelle promo et défis alternatifs solo | Ne retarde pas la première campagne complète |
 
-Les missions de soutien et d’engagement font partie des neuf projets communs et
+Les missions de soutien et d’engagement font partie des projets communs et
 peuvent valider plusieurs objectifs ; éviter de multiplier les catalogues distincts.
 Les exemples de ce document fixent le ton. Les coûts, textes et conditions complets
 seront écrits dans le catalogue versionné lors de l’implémentation.
@@ -504,14 +681,15 @@ seront écrits dans le catalogue versionné lors de l’implémentation.
 
 La [présentation officielle de la vie associative de l’ENSIIE](https://www.ensiie.fr/vie-etudiante/vie-associative)
 décrit une vie associative variée et le rôle du BdE dans son organisation.
-C’est le point d’ancrage de l’univers ; les noms proposés, personnages, promotions,
-soutiens et règles électorales de ce document sont des inventions de gameplay.
+C’est le point d’ancrage de l’univers. Les noms LeBar(c), Bakaclub, ARISE et BdE
+sont imposés par le porteur du projet ; les personnages, promotions, soutiens et
+règles électorales de ce document sont des inventions de gameplay.
 Source consultée le 12 novembre 2026. Les idées et durées ci-dessus sont des choix
 de conception, sans prétendre reproduire les usages réels de l’école.
 
 ## Choix à affiner ensemble
 
 - Ajuster la cible de 7 à 10 jours après simulation puis tests de jeu.
-- Noms et références ENSIIE : associations réelles ou univers entièrement fictif ?
+- Membres de l’équipe, dépôt GitHub et serveur de déploiement.
 - Direction visuelle : campus illustré, interface de gestion ou pixel art ?
 - Compte utilisateur et sauvegarde entre appareils après le MVP ?
