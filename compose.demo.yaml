@@ -1,0 +1,8 @@
+# Use with: docker compose -p cliicker-demo -f compose.yaml -f compose.demo.yaml up
+services:
+  api:
+    environment:
+      DEMO_MODE: "true"
+      APP_ORIGIN: http://localhost:8081
+  web:
+    ports: !override ["127.0.0.1:8081:80"]

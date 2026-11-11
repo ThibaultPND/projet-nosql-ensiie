@@ -1,5 +1,33 @@
 # Cliicker — plan du projet
 
+## État de l’implémentation
+
+Une première version jouable est implémentée. Les commandes de lancement et de
+vérification sont dans [README.md](README.md), qui décrit l’état réel du livrable.
+Les sections de design ci-dessous restent la cible produit ; elles ne signifient
+pas que chaque idée optionnelle est déjà développée.
+
+- Formulaire de fiche, révisions dans PostgreSQL et MongoDB, historique MongoDB,
+  outbox avec reprise et actions idempotentes.
+- Jeu solo : sept rôles, LeBar(c), Bakaclub, ARISE puis BdE, cinq améliorations,
+  vingt projets, trois équipiers, six événements et objectifs de campagne.
+- Interface responsive, gains hors ligne, sauvegarde serveur, mode démo séparé.
+- Lancement local sans Docker avec de vrais moteurs et données persistantes.
+- Compose et Dockerfile fournis ; configuration validée sans moteur Docker.
+  La construction des images et l’exécution Compose restent à vérifier avec Docker.
+- Tests du moteur, simulation et tests d’intégration sur les deux moteurs réels.
+  Parcours navigateur vérifié avec Chromium sur ordinateur et mobile.
+
+La simulation d’une stratégie automatique simple donne 7–8 jours à trois passages
+quotidiens, et 14–16 jours à un passage quotidien. Les essais humains restent à faire.
+GitHub et le serveur ne sont pas encore configurés : destination et accès manquants.
+
+Choix de simplification de cette version : progression regroupée dans un agrégat
+JSONB transactionnel PostgreSQL ; catalogue regroupé dans `catalogs` côté MongoDB.
+Le changement d’asso, les succès cosmétiques, le nom de liste, le choix des engagements
+et les réponses au débat sont différés. Deux engagements fixes et le débat sont des
+projets jouables ; le nombre d’événements pourra passer de six à douze après validation.
+
 ## Objectif
 
 Créer un clicker Web sur le thème de l’ENSIIE. On incarne un iiens qui commence
@@ -89,9 +117,10 @@ la prise en compte dans PostgreSQL et le statut de réplication, sans exposer la
 
 ### Démonstration obligatoire des bases
 
-Les commandes suivantes définissent le contrat de la future configuration Compose :
+Les commandes suivantes correspondent à la configuration Compose implémentée :
 base et utilisateur PostgreSQL `cliicker`, base MongoDB `cliicker`, variables
-d’authentification internes aux conteneurs. Elles seront vérifiées à l’implémentation.
+d’authentification internes aux conteneurs. Leur exécution via Docker reste à vérifier
+sur un hôte disposant d’un moteur Docker.
 
 ```sh
 docker compose up
@@ -268,6 +297,9 @@ transaction distribuée entre les deux bases.
 
 ### Modèle de données minimal
 
+Modèle actuellement implémenté dans `db/migrations/001_initial.sql`.
+Les champs de jeu sont regroupés dans une sauvegarde JSONB atomique pour ce MVP.
+
 PostgreSQL :
 
 - `player_profiles` : fiche courante de l’iiens.
@@ -277,26 +309,17 @@ PostgreSQL :
 - `sessions` : empreinte du jeton de session et expiration.
 - `game_states` : joueur, version du catalogue, rôle, implication, réputation,
   date du dernier calcul de production et version de sauvegarde.
-- `active_projects` : projet, équipe affectée, début, fin et état de récompense.
-- `event_instances` : événement tiré, choix proposés, décision et récompense.
-- `team_members` et `team_assignments` : membres recrutés et affectations.
-- `campaign_progress` : engagements, soutiens et étapes de campagne accomplis.
-- `achievements` : succès obtenus et récompenses déjà distribuées.
-- `owned_upgrades` : partie, identifiant d’amélioration, niveau.
-- `completed_projects` : partie, identifiant du projet, date de réalisation.
-- `promotions` : partie, rôle atteint, date de promotion.
+- L’agrégat `game_states.state` contient aussi les projets en cours et leurs dates,
+  équipiers recrutés et affectations, niveaux d’amélioration, projets terminés,
+  soutiens, engagements, événement en attente et journal des promotions.
 - `processed_actions` : clés d’idempotence des achats, projets et promotions.
 
 MongoDB :
 
 - `student_profiles` : documents des révisions de fiches, index unique `submissionId`.
-- `catalog_versions` : version, état de validation et métadonnées.
-- `roles` : ordre, conditions et contenu débloqué.
-- `upgrades` : coûts, progression des prix et effets.
-- `projects` : prérequis, coûts et récompenses.
-- `events` : conditions, choix, effets et règles de répétition.
-- `associations`, `characters`, `campaigns`, `achievements` : définitions des
-  spécialités, personnages, engagements de campagne et succès.
+- `catalogs` : un document par version immuable, contenant les associations, rôles,
+  améliorations, projets, équipiers et événements. Les missions de campagne sont
+  des projets et leurs accomplissements sont des jalons du jeu.
 
 Les documents de contenu portent leur version de catalogue. Les conditions et
 effets suivent un schéma validé, sans exécution de code fourni par les documents.
@@ -319,7 +342,7 @@ effets suivent un schéma validé, sans exécution de code fourni par les docume
 - Prévoir validation des entrées, limites de requêtes et protection des actions
   authentifiées contre les requêtes provenant d’une autre origine.
 
-### API envisagée
+### API implémentée
 
 | Route | Fonction |
 | --- | --- |
@@ -328,19 +351,13 @@ effets suivent un schéma validé, sans exécution de code fourni par les docume
 | `GET /api/profile/submissions/:id` | Consulter le statut de sa propre soumission |
 | `GET /api/profile/history` | Lire ses révisions depuis MongoDB |
 | `GET /api/game` | Charger la progression et calculer les gains passifs |
-| `GET /api/catalog` | Charger le contenu de la version associée à la partie |
-| `POST /api/clicks` | Envoyer un lot borné de clics |
-| `POST /api/upgrades/:id/buy` | Acheter un niveau d’amélioration |
-| `POST /api/projects/:id/complete` | Réaliser un projet accessible |
-| `POST /api/promotions` | Valider la prochaine promotion |
+| `POST /api/actions` | Action validée : clics, achat, lancement/récupération de projet, recrutement, choix d’événement ou promotion |
 | `GET /api/health` | Vérifier la disponibilité de l’API et des bases |
 
-Pour les projets chronométrés, remplacer la route de réalisation immédiate du
-prototype par `POST /api/projects/:id/start` et
-`POST /api/project-runs/:id/claim`. Ajouter des actions idempotentes pour choisir
-l’association, recruter/affecter un équipier, résoudre une instance d’événement,
-choisir les engagements de campagne et lancer l’élection. Les identifiants
-d’instances appartiennent à une partie et sont vérifiés côté serveur.
+`GET /api/game` renvoie aussi le catalogue de la version associée à la partie.
+Les actions passent par un schéma discriminé selon leur type et une clé
+`Idempotency-Key`. Les identifiants d’instances appartiennent à une partie et sont
+vérifiés côté serveur. Le frontend ne peut pas imposer un solde ou une date.
 
 ### Services Docker Compose
 
@@ -359,8 +376,9 @@ Les secrets passent par l’environnement ; un `.env.example` documentera les va
 nécessaires. Les versions d’images seront fixées lors de l’implémentation.
 
 Commande exigée à la livraison : `docker compose up` depuis un clone neuf.
-Le socle npm/Vite a été amorcé, mais l’application, le formulaire et Compose ne sont
-pas encore implémentés. Docker n’est pas disponible sur la machine de travail actuelle.
+L’application, le formulaire et Compose sont implémentés. Docker n’est pas disponible
+sur la machine de travail actuelle : le lancement est vérifié sans conteneurs,
+la configuration Compose est validée, mais l’exécution des conteneurs reste à tester.
 
 ## Organisation cible du dépôt
 

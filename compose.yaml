@@ -1,0 +1,77 @@
+name: cliicker
+x-api: &api
+  build:
+    context: .
+    target: api
+  environment: &api-env
+    DATABASE_URL: postgresql://cliicker:${POSTGRES_PASSWORD:-local_cliicker_only}@postgres:5432/cliicker
+    MONGO_URL: mongodb://root:${MONGO_PASSWORD:-local_mongo_only}@mongo:27017/cliicker?authSource=admin
+    APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+    COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    DEMO_MODE: "false"
+  restart: unless-stopped
+services:
+  postgres:
+    image: postgres:18.1-bookworm
+    environment:
+      POSTGRES_DB: cliicker
+      POSTGRES_USER: cliicker
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_cliicker_only}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U cliicker -d cliicker"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  mongo:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-local_mongo_only}
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          'mongosh --quiet --username "$${MONGO_INITDB_ROOT_USERNAME}" --password "$${MONGO_INITDB_ROOT_PASSWORD}" --authenticationDatabase admin --eval "db.adminCommand({ping:1}).ok"',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  init:
+    <<: *api
+    command: [node, --import, tsx, apps/api/init.ts]
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+      mongo: { condition: service_healthy }
+  api:
+    <<: *api
+    depends_on:
+      init: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          'fetch("http://127.0.0.1:3000/api/health").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  web:
+    build:
+      context: .
+      target: web
+    ports: ["${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+volumes:
+  postgres_data:
+  mongo_data:
