@@ -79,7 +79,7 @@ try {
     port: Number(process.env.PORT || (demo ? 8081 : 8080)),
   });
   console.log(
-    `Cliicker ${demo ? "(démo accélérée)" : ""} : ${address}\nDonnées persistantes : ${root}\nCtrl+C pour arrêter proprement.`,
+    `Cliicker ${demo ? "(démo)" : ""} : ${address}\nDonnées persistantes : ${root}\nCtrl+C pour arrêter proprement.`,
   );
   asyncExitHook(stop, { wait: 15000 });
 } catch (e) {

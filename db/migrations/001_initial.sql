@@ -6,3 +6,4 @@ CREATE TABLE IF NOT EXISTS outbox_events (submission_id uuid PRIMARY KEY REFEREN
 CREATE INDEX IF NOT EXISTS outbox_pending ON outbox_events(submission_id) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS game_states (player_id uuid PRIMARY KEY REFERENCES players(id), state jsonb NOT NULL);
 CREATE TABLE IF NOT EXISTS processed_actions (player_id uuid NOT NULL REFERENCES players(id), request_id uuid NOT NULL, fingerprint text NOT NULL, response jsonb NOT NULL, PRIMARY KEY(player_id, request_id));
+CREATE TABLE IF NOT EXISTS game_state_backups (player_id uuid NOT NULL REFERENCES players(id), catalog_version text NOT NULL, state jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(player_id, catalog_version));

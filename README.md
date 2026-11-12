@@ -1,91 +1,33 @@
 # Cliicker
 
-Un clicker solo sur la vie associative à l’ENSIIE. Tu rejoins **LeBar(c)**,
-**Bakaclub** ou **ARISE**, construis ton équipe et progresses jusqu’à la présidence
-du **BdE**. Les personnages, projets et élections sont fictifs.
+Un clicker solo sur la vie associative à l’ENSIIE : de simple élève à prez du BdE.
 
-Projet conçu pour le [sujet NoSQL](https://leperuvienn.github.io/notes-cours/S3/NSQL/Projet/).
-La fiche saisie dans le navigateur est réellement conservée dans **PostgreSQL et
-MongoDB**. L’historique affiché dans le jeu est lu dans MongoDB.
+## Jouer
 
-## État de la livraison
+- Clique pour gagner des points.
+- Achète « Un clic plus fort » pour gagner un point de plus à chaque clic.
+- Les points gagnés au total débloquent automatiquement les sept échelons.
+  Chaque promotion augmente aussi la valeur du clic.
 
-- Implémentés : formulaire, double persistance récupérable, sessions anonymes,
-  sauvegarde serveur, 7 rôles, 3 associations de départ, 5 améliorations, 20 projets,
-  3 équipiers, 6 événements, soutiens des assos et objectifs de campagne.
-- Tests : moteur et simulation ; API avec de vrais processus PostgreSQL et MongoDB ;
-  navigateur Chromium sur ordinateur et mobile.
-- Compose normal et démo : fichiers validés par le CLI Compose, images disponibles.
-  **Construction des images et exécution des conteneurs non vérifiées : aucun moteur
-  Docker n’est disponible sur la machine de développement.**
-- À compléter pour le rendu : membres de l’équipe, URL GitHub, hébergement serveur
-  et vérification du lancement Compose depuis un clone neuf. Aucun dépôt distant
-  ou serveur n’a été créé automatiquement.
+Le premier bonus coûte 20 points et la première promotion arrive à 50 points
+cumulés. Dépenser ses points ne fait pas reculer la progression. Les associations
+LeBar(c), Bakaclub et ARISE suivent les mêmes règles. Il n’y a plus de projets,
+d’équipe à gérer, de réputation, de revenus passifs ou de temps d’attente.
+La partie reste jouable après le dernier échelon.
 
-## Interface et interactions
-
-Le campus rassemble le bouton principal, la prochaine promotion et une suggestion
-pour avancer. La barre de ressources reste visible ; la navigation passe en bas de
-l’écran sur mobile. Les projets se filtrent par disponibilité, durée, campagne ou
-réalisation, et une recherche permet de retrouver une mission rapidement.
-
-Les clics réagissent immédiatement, les projets affichent leur progression et les
-promotions sont célébrées dans un dialogue. Le compteur d’implication est une
-estimation animée entre les confirmations du serveur : aucune ressource n’est
-attribuée par le navigateur. Une réponse perdue peut être rejouée avec la même clé,
-sans doubler les gains. Les raisons des verrouillages sont affichées sur les cartes.
-
-Les animations respectent la préférence système. Elles peuvent aussi être réduites
-avec le bouton en bas de la navigation sur ordinateur, ou dans **Ma fiche** sur
-mobile. Les illustrations sont des SVG embarqués, sans ressource externe à charger.
-
-## Jouer sans Docker sur cette machine
-
-Prérequis : npm et un environnement Linux/macOS compatible avec les binaires de
-PostgreSQL et MongoDB des dépendances de développement. Node 22.12+ recommandé ;
-le projet inclut aussi un binaire Node 22 comme outil de développement npm.
-
-```sh
-npm ci
-npm run dev:local
-```
-
-Ouvrir **http://localhost:8080**. Le premier démarrage peut télécharger le binaire
-MongoDB. Il lance deux vrais moteurs sur des ports locaux libres et l’API sert le
-frontend compilé. Pas de Docker, pas de privilèges administrateur requis.
-Les données restent dans `.local-data/normal/`, ignoré par Git. Ctrl+C arrête les
-processus sans effacer la sauvegarde. Garder le même navigateur et le même nom
-d’hôte pour retrouver sa session.
-
-Pour parcourir rapidement les promotions :
-
-```sh
-npm run dev:demo
-```
-
-Ouvrir **http://localhost:8081**. Les durées des projets et les gains passifs sont
-accélérés × 3 600. Les données et le cookie de session sont distincts de la partie
-normale. Le premier achat nécessite toujours 20 clics. Le mode démo est une option
-au lancement du serveur, jamais une commande envoyée depuis le navigateur.
-
-Les tests créent leurs propres bases et ne touchent pas ces sauvegardes. Si le
-processus local a été tué brutalement, un fichier `launch.lock` peut subsister :
-contrôler le PID indiqué et l’absence de processus utilisant ce dossier avant toute
-intervention. Ne pas effacer le dossier de données pour résoudre un blocage.
+L’écran principal contient le score, le bouton de clic, le prochain échelon et
+une seule amélioration. La fiche et son historique restent accessibles par « Ma fiche ».
+La fiche est réellement conservée dans **PostgreSQL et MongoDB**.
 
 ## Lancer avec Docker Compose
 
-Prérequis : Docker Engine et Compose récent ; Compose 2.24.4+ pour `!override`
-utilisé par la configuration de démonstration. Depuis le clone du dépôt :
-
 ```sh
-docker compose up
+docker compose up -d --build --wait
 ```
 
-Ouvrir **http://localhost:8080**. Les valeurs locales par défaut permettent de
-lancer sans fichier `.env`. Compose construit les images, attend les bases,
-exécute les migrations et le seed, puis démarre l’API et le frontend.
-Les volumes nommés conservent les données entre les arrêts.
+Ouvrir **http://localhost:8080**. Aucun `.env` n’est nécessaire en local.
+Compose construit les images, initialise les bases et démarre l’API et le frontend.
+La construction et le démarrage ont été vérifiés avec Docker Engine sur cette machine.
 
 ```sh
 docker compose ps
@@ -94,18 +36,63 @@ docker compose stop
 docker compose start
 ```
 
-Après une modification du code, utiliser `docker compose up --build`.
-Ne pas lancer `docker compose down -v` pour un simple redémarrage : cette commande
-efface les volumes des bases.
+Les volumes nommés conservent les données. Ne pas utiliser `docker compose down -v`
+pour un simple redémarrage : cette commande efface les bases.
 
-Mode soutenance, sur le port 8081 et dans des volumes distincts :
+Pour une partie de démonstration distincte sur **http://localhost:8081** :
 
 ```sh
-docker compose -p cliicker-demo -f compose.yaml -f compose.demo.yaml up
+docker compose -p cliicker-demo -f compose.yaml -f compose.demo.yaml up -d --build --wait
 ```
 
-Utiliser toujours les mêmes options `-p` et `-f` pour arrêter ou inspecter cette
-instance. Ne pas activer le mode démo sur les volumes d’une partie normale.
+Cette instance possède ses propres volumes et son cookie. Elle suit les mêmes règles
+que la partie normale : le jeu simplifié n’a plus de délais à accélérer.
+Utiliser les mêmes options `-p` et `-f` pour l’inspecter ou l’arrêter.
+
+## Anciennes parties
+
+À la première lecture d’une partie `ensiie-1`, le serveur la convertit vers
+`ensiie-simple-2`. Il conserve la fiche, le solde, le rôle et le nombre de clics.
+Chaque ancien niveau d’amélioration devient un point de bonus permanent par clic.
+La progression cumulée repart au minimum du seuil du rôle déjà atteint et du solde
+conservé. Les anciennes missions ne sont plus actives.
+
+La sauvegarde complète d’origine reste dans `game_state_backups`, dans la même
+transaction que la conversion. Le catalogue d’origine reste également en base.
+Les nouvelles parties utilisent directement le catalogue simplifié.
+
+## Développer et vérifier
+
+Node 22.12+ recommandé. Le lancement local nécessite un Linux/macOS compatible
+avec les binaires PostgreSQL et MongoDB des dépendances de développement.
+
+```sh
+npm ci
+npm run dev:local
+```
+
+Ouvrir **http://localhost:8080**. Les données locales sont conservées dans
+`.local-data/normal/`. Ctrl+C arrête les moteurs sans supprimer les données.
+`npm run dev:demo` lance une partie indépendante sur le port 8081.
+
+```sh
+npm run build
+npm test
+npm run test:integration
+npm run test:browser
+npm run simulate
+```
+
+- Moteur : prix, bonus, promotions automatiques, lots de clics, limites et conversion.
+- Intégration : deux vrais moteurs, double écriture, reprise après panne, isolation,
+  achats concurrents, idempotence, archive des anciennes parties et redémarrage.
+- Navigateur : inscription, clics, achat, promotion, fiche, historique, sauvegarde,
+  mobile et réponse perdue après une écriture réussie. Chromium requis
+  (`/usr/bin/chromium`, ou variable `CHROMIUM_PATH`). Captures dans `test-results/`.
+- Simulation : parcours complet des trois associations en achetant les bonus dès
+  qu’ils sont abordables. Environ 772 clics jusqu’au dernier échelon avec cette stratégie.
+
+Les tests créent leurs propres bases et ne modifient pas les parties Docker.
 
 ## Vérifier la double persistance
 
@@ -156,69 +143,25 @@ pas être confondue avec un démarrage sans catalogue.
 
 ```text
 Navigateur → web (Nginx) → api (Fastify)
-                              ├── PostgreSQL : profils, sessions, jeu, outbox
-                              └── MongoDB : historique des profils, catalogue
+                              ├── PostgreSQL : fiches, sessions, partie, outbox
+                              └── MongoDB : historique des fiches, catalogue
 init → migrations PostgreSQL + catalogue MongoDB
 ```
 
-**PostgreSQL** conserve `players`, `sessions`, `player_profiles`,
-`profile_submissions`, `outbox_events`, `game_states` et `processed_actions`.
-Les tables de profils rendent les saisies directement consultables en SQL.
-La progression du jeu est un agrégat JSONB dans `game_states`, verrouillé par joueur
-pour chaque mutation. Cette simplification remplace les nombreuses petites tables
-initialement envisagées, tout en conservant les transactions PostgreSQL.
+PostgreSQL valide chaque action sous verrou par joueur. Les points sont stockés en
+millièmes entiers, les clics sont limités à dix par seconde et chaque requête possède
+une clé d’idempotence. Les achats et les promotions sont calculés côté serveur.
+Un lot de clics donne les mêmes gains que des clics isolés, y compris au passage
+d’un échelon. Il n’y a pas de revenu hors ligne.
 
-**MongoDB** conserve les révisions des fiches dans `student_profiles`, indexées
-par identifiant de soumission et par joueur/révision. `catalogs` contient les règles
-et les projets sous forme d’un document validé par version. Le catalogue est chargé
-par l’API, jamais utilisé comme autorité par le navigateur. Une sauvegarde conserve
-sa version ; modifier un catalogue publié exige un nouvel identifiant de version.
+Une soumission de fiche écrit sa révision et une tâche d’outbox dans la même
+transaction SQL. L’API réplique les tâches vers MongoDB toutes les deux secondes,
+avec un upsert idempotent. La reprise après panne est automatique ; il n’y a pas
+de transaction distribuée. L’historique est lu dans MongoDB, trié par révision.
 
-Lors d’une saisie, une transaction PostgreSQL écrit la fiche courante, sa révision
-et une tâche d’outbox. Toutes les deux secondes, l’API transmet les tâches à MongoDB
-avec un upsert idempotent, puis confirme leur livraison dans PostgreSQL. Une panne
-entre ces opérations est récupérable. **Il n’y a pas de transaction distribuée** :
-la cohérence entre les deux moteurs est éventuelle et son état est affiché.
-Les révisions sont triées par numéro, pas par ordre de livraison.
-
-Les actions du jeu sont validées côté serveur, avec des clés d’idempotence, un
-verrou par joueur, un plafond de clics et des dates serveur. Les récompenses sont
-figées au lancement d’un projet et ne peuvent être récupérées qu’une fois. Les gains
-passifs sont limités à 24 h ; les projets terminés restent récupérables sans expiration.
-
-Les cookies de session sont HttpOnly et SameSite=Strict ; les jetons sont stockés
-sous forme d’empreinte. Les mutations demandent un en-tête propre à l’application
-et, en configuration Compose, une origine autorisée. Aucun CORS public n’est activé.
-Les bases ne sont pas publiées sur des ports hôte.
-
-## Développer et tester
-
-```sh
-npm ci
-npm test
-npm run test:integration
-npm run build
-npm run test:browser
-npm run simulate
-```
-
-- `test` : règles économiques, plafonds, concurrence logique des équipiers,
-  récompenses uniques, catalogue et parcours complet des trois associations.
-- `test:integration` : vraies bases temporaires, mêmes saisies dans les deux moteurs,
-  isolation des sessions, reprises et achats concurrents. PostgreSQL et MongoDB sont
-  aussi redémarrés avec les mêmes données. Les données temporaires de PostgreSQL restent
-  dans un dossier `cliicker-test-*` sous le répertoire temporaire du système.
-- `test:browser` : nécessite Chromium (`/usr/bin/chromium` par défaut, personnalisable
-  par `CHROMIUM_PATH`). Création, jeu, modification, historique, rechargement, filtres, recherche, dialogues,
-  mobile, animations réduites et reprise après perte de réponse réseau.
-  Captures dans `test-results/`, ignoré par Git. Exécuter `build` avant.
-- `simulate` : stratégie automatique avec 1, 3 ou 12 passages par jour. Résultats
-  initiaux : 14–16 jours, 7–8 jours et 4,7–5,4 jours respectivement. Cela teste la
-  faisabilité, sans remplacer l’équilibrage avec de vrais joueurs.
-
-Pour travailler avec des bases déjà disponibles, définir `DATABASE_URL` et
-`MONGO_URL`, puis utiliser `npm run db:init`, `npm run dev:api` et `npm run dev`
-dans des terminaux distincts. Le serveur Vite relaie `/api` au port 3000.
+Le catalogue est versionné, validé et chargé depuis MongoDB. Modifier son contenu
+nécessite une nouvelle version. Les cookies sont HttpOnly et SameSite=Strict ;
+les jetons sont stockés sous forme d’empreinte. Les bases ne publient pas de port hôte.
 
 ## Déploiement serveur à effectuer
 
@@ -234,23 +177,12 @@ vers le port 8080. L’URL publique, les membres de l’équipe et la destinatio
 restent à renseigner. Une fois le serveur disponible, y vérifier le parcours et
 les deux bases avant de déclarer le déploiement terminé.
 
-## Démonstration de soutenance
+## Limites
 
-1. Présenter le parcours élève → asso → BdE et les quatre associations.
-2. Remplir la fiche, puis prouver la double écriture avec `psql` et `mongosh`.
-3. Expliquer la différence entre les rôles des deux moteurs et la reprise par outbox.
-4. Jouer en mode démo : 20 clics, planning partagé, première affiche, promotion,
-   projets longs accélérés, puis soutiens et engagements BdE.
-5. Modifier la fiche, afficher les révisions et démontrer la persistance au redémarrage.
+La partie est solo et liée au cookie du navigateur. Il n’y a pas de récupération
+de compte : changer de navigateur ou perdre le cookie fait perdre l’accès à la
+partie, même si les données restent en base. Le changement d’association n’est
+pas disponible. Les rôles et promotions sont fictifs.
 
-## Limites et suites
-
-Le jeu est solo. Il n’y a pas de récupération de compte : perdre le cookie ou changer
-de navigateur fait perdre l’accès à la partie, même si les données restent en base.
-Le changement d’asso en cours de campagne, les succès cosmétiques, le choix du nom
-de liste et les réponses au débat restent à développer. Le débat et deux engagements
-sont actuellement des projets à accomplir. Le catalogue propose 6 événements au
-lieu des 12 imaginés dans le plan. Les clés d’idempotence sont conservées sans
-purge automatique : prévoir une politique de rétention avant une exploitation longue.
-
-La conception détaillée et les objectifs ultérieurs sont dans [AGENT.md](AGENT.md).
+Les membres de l’équipe, le dépôt distant et l’hébergement du rendu restent à
+renseigner. Les clés d’idempotence sont conservées sans purge automatique.

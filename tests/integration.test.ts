@@ -175,10 +175,31 @@ test(
       [player],
     );
     const purchases = await Promise.allSettled([
-      db.store.snapshot(player, { type: "buy", id: "planning" }, randomUUID()),
-      db.store.snapshot(player, { type: "buy", id: "planning" }, randomUUID()),
+      db.store.snapshot(player, { type: "buy" }, randomUUID()),
+      db.store.snapshot(player, { type: "buy" }, randomUUID()),
     ]);
     assert.equal(purchases.filter((p) => p.status === "fulfilled").length, 1);
+    // Lost action response: replay returns current state without spending twice.
+    const clickKey = randomUUID();
+    const firstClick = await db.store.snapshot(player, { type: "click", count: 1 }, clickKey);
+    const replay = await db.store.snapshot(player, { type: "click", count: 1 }, clickKey);
+    assert.deepEqual(replay.game, firstClick.game);
+    await assert.rejects(() => db.store.snapshot(player, { type: "buy" }, clickKey));
+    // An existing player is converted once; original state stays archived intact.
+    const oldPlayer = await db.store.createSession();
+    await db.store.saveProfile(oldPlayer.id, { ...value, associationId: "arise" }, randomUUID());
+    const legacy = { catalogVersion: "ensiie-1", associationId: "arise", role: 2,
+      implication: 123456, clicks: 33, createdAt: 100, upgrades: { planning: 3, stand: 2 },
+      runs: [{ id: "old-project" }], reputation: 150 };
+    await db.store.pool.query("UPDATE game_states SET state=$2 WHERE player_id=$1", [oldPlayer.id, JSON.stringify(legacy)]);
+    const migrated = await db.store.snapshot(oldPlayer.id);
+    assert.equal(migrated.game.implication, 123456);
+    assert.equal(migrated.game.role, 2);
+    assert.equal(migrated.clickValue, 9);
+    assert.deepEqual((await db.store.snapshot(oldPlayer.id)).game, migrated.game);
+    const backup = await db.store.pool.query("SELECT state FROM game_state_backups WHERE player_id=$1", [oldPlayer.id]);
+    assert.equal(backup.rowCount, 1);
+    assert.deepEqual(backup.rows[0].state, legacy);
     // Restart MongoDB on its existing directory, then verify durable documents.
     await db.mongo.stop({ doCleanup: false });
     await db.mongo.start();
@@ -190,6 +211,6 @@ test(
     assert.equal(persisted.presentation, second.presentation);
     const latest = await app.inject({ url: "/api/game", headers });
     assert.equal(latest.statusCode, 200, latest.body);
-    assert.equal(latest.json().game.upgrades.planning, 1);
+    assert.equal(latest.json().game.clickLevel, 1);
   },
 );

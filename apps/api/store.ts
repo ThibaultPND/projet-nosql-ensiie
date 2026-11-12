@@ -11,14 +11,7 @@ import type {
 } from "../../packages/shared/model.js";
 import { catalog as initialCatalog } from "../../content/catalog.js";
 import { validateCatalog } from "./catalog-validation.js";
-import {
-  advance,
-  applyAction,
-  freshGame,
-  GameError,
-  rate,
-  requirements,
-} from "./engine.js";
+import { applyAction, freshGame, GameError, clickValue, upgradePrice, migrateGame } from "./engine.js";
 export const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 export class Store {
@@ -262,14 +255,20 @@ export class Store {
         [player],
       );
       if (!r.rows[0]) throw new GameError("Crée ta fiche avant de jouer.");
-      const game = r.rows[0].state as Game;
-      const catalog = await this.catalog(game.catalogVersion);
+      const saved = r.rows[0].state as Game;
+      const catalog = await this.catalog();
       const now = Date.now();
-      const offlineGain = advance(game, catalog, now, this.speed);
+      if (saved.catalogVersion !== catalog.version) {
+        await c.query(
+          "INSERT INTO game_state_backups(player_id,catalog_version,state) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+          [player, saved.catalogVersion, JSON.stringify(saved)],
+        );
+      }
+      const game = migrateGame(saved, catalog, now);
       if (action && key) {
         const fingerprint = hash(JSON.stringify({ action }));
         if (!(await this.previous(c, player, key, fingerprint))) {
-          applyAction(game, catalog, action, now, this.speed);
+          applyAction(game, catalog, action, now);
           await c.query("INSERT INTO processed_actions VALUES($1,$2,$3,$4)", [
             player,
             key,
@@ -286,10 +285,8 @@ export class Store {
         game,
         catalog,
         serverTime: now,
-        rate: rate(game, catalog),
-        offlineGain,
-        requirements: requirements(game, catalog),
-        demo: this.speed !== 1,
+        clickValue: clickValue(game, catalog),
+        upgradePrice: upgradePrice(game, catalog),
       };
     });
   }

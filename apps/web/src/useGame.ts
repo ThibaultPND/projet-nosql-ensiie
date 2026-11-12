@@ -66,10 +66,7 @@ export function useGame() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [pendingClicks, setPendingClicks] = useState(0);
-  const [clock, setClock] = useState(Date.now());
-  const [offlineGain, setOfflineGain] = useState(0);
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
-  const [promotion, setPromotion] = useState<string | null>(null);
   const [failed, setFailed] = useState<{ action: Action; key: string } | null>(
     null,
   );
@@ -82,7 +79,6 @@ export function useGame() {
   const unsent = useRef(0);
   const failedRef = useRef<typeof failed>(null);
   const queued = useRef(0);
-  const serverAnchor = useRef({ time: Date.now(), at: performance.now() });
   const latest = useRef<Snapshot | null>(null);
   const lastClicks = useRef<number[]>([]);
   const notice = useCallback(
@@ -91,9 +87,7 @@ export function useGame() {
   );
   const accept = useCallback((s: Snapshot) => {
     latest.current = s;
-    serverAnchor.current = { time: s.serverTime, at: performance.now() };
     setSnapshot(s);
-    setClock(s.serverTime);
   }, []);
   const enqueue = useCallback((job: () => Promise<void>) => {
     const next = queue.current.then(job);
@@ -110,20 +104,12 @@ export function useGame() {
         setProfile(r.profile);
         if (r.profile) {
           const s = await api<Snapshot>("/game");
-          setOfflineGain(s.offlineGain);
           accept(s);
         }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [accept]);
-  useEffect(() => {
-    const t = setInterval(() => {
-      const a = serverAnchor.current;
-      setClock(a.time + performance.now() - a.at);
-    }, 250);
-    return () => clearInterval(t);
-  }, []);
   useEffect(() => {
     if (!profile) return;
     const poll = () => {
@@ -152,7 +138,7 @@ export function useGame() {
         );
         if (live && r.replicated) {
           setSubmission(null);
-          setProfileStatus("Fiche enregistrée dans les deux bases.");
+          setProfileStatus("Fiche enregistrée.");
           notice("Ta fiche est enregistrée.");
         }
       } catch {
@@ -186,23 +172,10 @@ export function useGame() {
           setError("");
           if (action.type === "click")
             setPendingClicks((n) => Math.max(0, n - action.count));
-          else {
-            const text =
-              action.type === "buy"
-                ? "Amélioration achetée. Ton équipe prend de la vitesse !"
-                : action.type === "start"
-                  ? "Projet lancé. Ton équipe s’en occupe."
-                  : action.type === "claim"
-                    ? `Projet terminé : +${s.game.reputation - (before?.game.reputation || 0)} réputation !`
-                    : action.type === "recruit"
-                      ? "Un nouveau talent dans ton équipe !"
-                      : action.type === "event"
-                        ? "Bien joué. La vie asso continue !"
-                        : "Une nouvelle étape commence !";
-            notice(text);
-            if (action.type === "promote")
-              setPromotion(s.catalog.roles[s.game.role].name);
-          }
+          if (before && s.game.role > before.game.role)
+            notice(`Nouvel échelon : ${s.catalog.roles[s.game.role].name} !`);
+          else if (action.type === "buy")
+            notice(`Ton clic rapporte maintenant ${s.clickValue} points.`);
         } catch (e) {
           const definitive =
             e instanceof ApiError &&
@@ -281,7 +254,7 @@ export function useGame() {
       setSubmission(r.replicated ? null : r.submissionId);
       setProfileStatus(
         r.replicated
-          ? "Fiche enregistrée dans les deux bases."
+          ? "Fiche enregistrée."
           : "Enregistrement en cours…",
       );
       if (r.replicated) notice("Ta fiche est enregistrée.");
@@ -304,21 +277,19 @@ export function useGame() {
       setHistoryLoading(false);
     }
   }, []);
-  // Display-only interpolation. Purchases and rewards still use the server transaction.
-  const estimate = snapshot
-    ? Math.min(
-        1e14,
-        snapshot.game.implication +
-          (failed
-            ? 0
-            : (Math.min(15000, Math.max(0, clock - snapshot.serverTime)) *
-                snapshot.rate *
-                (snapshot.demo ? 3600 : 1)) /
-              1000),
-      ) /
-        1000 +
-      (failed ? 0 : pendingClicks)
-    : 0;
+  // Preview queued clicks, including a promotion crossed within a batch.
+  let estimate = snapshot ? snapshot.game.implication / 1000 : 0;
+  if (snapshot && !failed) {
+    let role = snapshot.game.role;
+    let earned = snapshot.game.totalEarned / 1000;
+    for (let i = 0; i < pendingClicks; i++) {
+      const gain = snapshot.catalog.roles[role].clickValue +
+        snapshot.game.clickLevel * snapshot.catalog.upgrade.bonus + snapshot.game.legacyBonus;
+      estimate += gain;
+      earned += gain;
+      while (snapshot.catalog.roles[role + 1] && earned >= snapshot.catalog.roles[role + 1].threshold) role++;
+    }
+  }
   return {
     profile,
     snapshot,
@@ -326,13 +297,8 @@ export function useGame() {
     error,
     busy,
     pendingClicks,
-    clock,
     estimate,
-    offlineGain,
-    clearOffline: () => setOfflineGain(0),
     toast,
-    promotion,
-    closePromotion: () => setPromotion(null),
     failed,
     saving,
     submission,

@@ -18,135 +18,51 @@ try {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(address);
-  await page.getByRole("heading", { name: "Tout commence par toi." }).waitFor();
+  await page.getByRole("heading", { name: "De l’élève au prez du BdE." }).waitFor();
   await mkdir("test-results", { recursive: true });
-  await page.screenshot({
-    path: "test-results/welcome.png",
-    fullPage: true,
-    animations: "disabled",
-  });
+  await page.screenshot({ path: "test-results/welcome.png", fullPage: true });
   await page.getByLabel("Ton pseudo").fill("Camille");
-  await page.getByRole("radio", { name: /Bakaclub/ }).check();
-  await page
-    .getByLabel("Pourquoi tu rejoins cette asso ?")
-    .fill("Je veux partager ma passion et organiser des projets ensemble.");
-  await page
-    .getByRole("button", { name: "Entrer dans la vie associative" })
-    .click();
-  await page.getByRole("heading", { name: /Salut, Camille/ }).waitFor();
-  await page.getByText("Ta fiche est enregistrée.", { exact: false }).waitFor();
-  // Enter key/clicks, real requests and batching.
-  const click = page.getByRole("button", { name: /S’impliquer/ });
-  for (let i = 0; i < 4; i++) {
-    for (let n = 0; n < 10; n++) await click.click();
-    await page.waitForTimeout(1150);
+  await page.getByLabel("Ton association").selectOption("bakaclub");
+  await page.getByLabel("Quelques mots sur toi").fill("Je veux partager ma passion avec mon association.");
+  await page.getByRole("button", { name: "Commencer à jouer" }).click();
+  await page.getByRole("heading", { name: "Simple élève", exact: true }).waitFor();
+  const click = page.getByRole("button", { name: /^Cliquer/ });
+  async function clicks(count: number) {
+    for (let i = 0; i < count; i++) {
+      await click.click();
+      if ((i + 1) % 10 === 0) await page.waitForTimeout(1150);
+    }
+    await page.getByText("Partie sauvegardée", { exact: true }).waitFor();
   }
-  await page
-    .locator(".upgrade")
-    .filter({ hasText: "Planning partagé" })
-    .getByRole("button")
-    .click();
-  await page.getByRole("button", { name: "Les projets", exact: true }).click();
-  await page
-    .locator(".project")
-    .filter({ hasText: "La première affiche" })
-    .getByRole("button")
-    .click();
-  await page.getByRole("button", { name: "Récupérer", exact: true }).click();
-  await page.getByRole("button", { name: "Mon campus", exact: true }).click();
-  await page.getByRole("button", { name: /Passer au rôle suivant/ }).click();
-  await page.getByRole("dialog", { name: "Promotion obtenue" }).waitFor();
-  await page.getByRole("button", { name: "C’est parti !" }).click();
-  await page.getByText("Membre d’asso", { exact: false }).waitFor();
-  await page.screenshot({
-    path: "test-results/campus.png",
-    fullPage: true,
-    animations: "disabled",
-  });
-  await page.getByRole("button", { name: "Mon parcours", exact: true }).click();
-  await page
-    .getByRole("dialog", { name: "Mon parcours jusqu’au BdE" })
-    .waitFor();
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Les projets", exact: true }).click();
-  await page.getByRole("button", { name: "Tous", exact: true }).click();
-  await page
-    .getByRole("textbox", { name: "Rechercher un projet" })
-    .fill("grand débat");
-  assert.equal(await page.locator(".project").count(), 1);
-  assert.equal(await page.locator(".project button").isDisabled(), true);
-  await page
-    .getByRole("textbox", { name: "Rechercher un projet" })
-    .fill("aucun-projet-xyz");
-  await page
-    .getByRole("heading", { name: "Aucun projet dans cette sélection." })
-    .waitFor();
-  await page
-    .getByRole("button", { name: "Voir tous les projets", exact: true })
-    .click();
-  assert.ok((await page.locator(".project").count()) > 5);
-  await page.screenshot({
-    path: "test-results/projects.png",
-    fullPage: true,
-    animations: "disabled",
-  });
-  await page.getByRole("button", { name: "Mon équipe", exact: true }).click();
-  assert.equal(await page.locator(".team-card").count(), 3);
-  await page.screenshot({
-    path: "test-results/team.png",
-    fullPage: true,
-    animations: "disabled",
-  });
+  await clicks(20);
+  assert.equal(await page.getByTestId("points").textContent(), "20");
+  await page.getByRole("button", { name: "Améliorer · 20 points" }).click();
+  await page.getByRole("button", { name: "Cliquer +2 points par clic", exact: true }).waitFor();
+  assert.equal(await page.getByTestId("points").textContent(), "0");
+  await clicks(20);
+  await page.getByRole("heading", { name: "Membre d’asso", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Cliquer +3 points par clic", exact: true }).waitFor();
+  const balance = await page.getByTestId("points").textContent();
+  await page.screenshot({ path: "test-results/game.png", fullPage: true });
   await page.getByRole("button", { name: "Ma fiche", exact: true }).click();
-  await page.getByRole("button", { name: "Modifier ma présentation" }).click();
-  await page
-    .getByLabel("Pourquoi tu rejoins cette asso ?")
-    .fill("Deuxième version : le stand est prêt, direction le bureau !");
+  await page.getByLabel("Quelques mots sur toi").fill("Deuxième version : je progresse tranquillement dans mon asso.");
   await page.getByRole("button", { name: "Enregistrer ma fiche" }).click();
+  await page.getByRole("heading", { name: "Membre d’asso", exact: true }).waitFor();
   await page.waitForTimeout(3000);
-  await page.getByRole("button", { name: "Actualiser l’historique" }).click();
-  await page.getByText("VERSION 2", { exact: false }).waitFor();
-  assert.equal(
-    await db.store.db.collection("student_profiles").countDocuments(),
-    2,
-  );
+  await page.getByRole("button", { name: "Ma fiche", exact: true }).click();
+  await page.getByText("Historique de ma fiche", { exact: true }).click();
+  await page.getByText("Version 2 · Camille", { exact: true }).waitFor();
+  assert.equal(await db.store.db.collection("student_profiles").countDocuments(), 2);
   await page.reload();
-  await page.getByRole("heading", { name: /Salut, Camille/ }).waitFor();
+  await page.getByRole("heading", { name: "Membre d’asso", exact: true }).waitFor();
+  assert.equal(await page.getByTestId("points").textContent(), balance);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({
-    path: "test-results/mobile.png",
-    fullPage: true,
-    animations: "disabled",
-  });
-  assert.ok(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth,
-    ),
-    "Pas de débordement mobile",
-  );
-  await page.getByRole("button", { name: "Les projets", exact: true }).click();
-  await page.getByRole("button", { name: "Tous", exact: true }).click();
-  await page.screenshot({
-    path: "test-results/mobile-projects.png",
-    fullPage: true,
-    animations: "disabled",
-  });
-  assert.ok(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth,
-    ),
-  );
+  await page.screenshot({ path: "test-results/mobile.png", fullPage: true });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.getByRole("button", { name: "Mon campus", exact: true }).click();
-  await page.getByRole("button", { name: /S’impliquer/ }).focus();
+  await click.focus();
   await page.keyboard.press("Enter");
-  assert.equal(await page.locator(".click-particles span").count(), 0);
-  assert.equal(
-    await page
-      .locator(".steam")
-      .evaluate((e) => getComputedStyle(e).animationName),
-    "none",
-  );
+  await page.waitForTimeout(1200);
   // Lost response after a successful server write: retry must preserve the key.
   await page.waitForTimeout(1800);
   const before = (await db.store.pool.query("SELECT state FROM game_states"))
@@ -165,7 +81,7 @@ try {
       });
     } else await route.fulfill({ response });
   });
-  await page.getByRole("button", { name: /S’impliquer/ }).click();
+  await page.getByRole("button", { name: /^Cliquer/ }).click();
   await page
     .getByRole("button", { name: "Réessayer la même action" })
     .waitFor();
@@ -189,7 +105,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "Navigateur : création, double persistance, clics, achat, projet, promotion, édition, historique, rechargement et mobile OK.",
+    "Navigateur : création, double persistance, clics, bonus, promotion automatique, édition, historique, rechargement et mobile OK.",
   );
 } finally {
   await browser.close();
