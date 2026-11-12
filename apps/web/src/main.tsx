@@ -1,958 +1,1508 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type {
-  Action,
-  Profile,
-  Snapshot,
-  Submission,
-} from "../../../packages/shared/model";
+import type { Project } from "../../../packages/shared/model";
+import { useGame, type GameController } from "./useGame";
+import {
+  Icon,
+  AssoMark,
+  Brand,
+  Modal,
+  Scene,
+  names,
+  num,
+  duration,
+  type IconName,
+} from "./ui";
+import { ProfileForm } from "./ProfileForm";
 import "./style.css";
-const uuid = () =>
-  typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
-        (
-          Number(c) ^
-          (crypto.getRandomValues(new Uint8Array(1))[0] &
-            (15 >> (Number(c) / 4)))
-        ).toString(16),
-      );
-const names: Record<string, string> = {
-  lebarc: "LeBar(c)",
-  bakaclub: "Bakaclub",
-  arise: "ARISE",
-};
-const icons: Record<string, string> = {
-  lebarc: "☕",
-  bakaclub: "桜",
-  arise: ">_",
-};
-const num = (n: number) =>
-  new Intl.NumberFormat("fr-FR", {
-    maximumFractionDigits: 1,
-    notation: n >= 1000000 ? "compact" : "standard",
-  }).format(n);
-const duration = (seconds: number) =>
-  seconds <= 0
-    ? "Prêt !"
-    : seconds < 60
-      ? `${Math.ceil(seconds)} s`
-      : seconds < 3600
-        ? `${Math.ceil(seconds / 60)} min`
-        : `${Math.round(seconds / 360) / 10} h`;
-async function api<T>(
-  path: string,
-  method = "GET",
-  body?: unknown,
-  key?: string,
-): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    method,
-    credentials: "same-origin",
-    headers: {
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      "X-Cliicker": "1",
-      ...(key ? { "Idempotency-Key": key } : {}),
-    },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+type Tab = "campus" | "projets" | "equipe" | "journal" | "fiche";
+const tabs: { id: Tab; label: string; short: string; icon: IconName }[] = [
+  { id: "campus", label: "Mon campus", short: "Campus", icon: "campus" },
+  { id: "projets", label: "Les projets", short: "Projets", icon: "projects" },
+  { id: "equipe", label: "Mon équipe", short: "Équipe", icon: "team" },
+  { id: "journal", label: "La vie asso", short: "Vie asso", icon: "journal" },
+  { id: "fiche", label: "Ma fiche", short: "Profil", icon: "profile" },
+];
+function useReducedMotion() {
+  const [manual, setManual] = useState(() => {
+    try {
+      return localStorage.getItem("cliicker-motion") === "reduced";
+    } catch {
+      return false;
+    }
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Connexion interrompue.");
-  return data;
+  const [system, setSystem] = useState(
+    matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    const m = matchMedia("(prefers-reduced-motion: reduce)");
+    const listener = () => setSystem(m.matches);
+    m.addEventListener("change", listener);
+    return () => m.removeEventListener("change", listener);
+  }, []);
+  return {
+    reduced: manual || system,
+    manual,
+    toggle: () =>
+      setManual((v) => {
+        try {
+          localStorage.setItem("cliicker-motion", !v ? "reduced" : "full");
+        } catch {}
+        return !v;
+      }),
+  };
 }
 function App() {
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [tab, setTab] = useState("campus");
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const game = useGame();
+  const [tab, setTab] = useState<Tab>("campus");
   const [editing, setEditing] = useState(false);
-  const [history, setHistory] = useState<Submission[]>([]);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [submission, setSubmission] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [clock, setClock] = useState(Date.now());
-  const [selectedMember, setSelectedMember] = useState("");
-  const [pendingClicks, setPendingClicks] = useState(0);
-  const clicks = useRef(0);
-  const chain = useRef(Promise.resolve());
-  const [busy, setBusy] = useState(false);
-  const formKey = useRef<string | null>(null);
-  const failed = useRef<{ action: Action; key: string } | null>(null);
-  const [retryAvailable, setRetryAvailable] = useState(false);
-  const requestBusy = useRef(false);
-  const accept = (s: Snapshot) => {
-    setSnapshot(s);
-    setClock(s.serverTime);
-  };
-  const firstSnapshot = useRef(true);
-  const refresh = () =>
-    api<Snapshot>("/game").then((s) => {
-      if (firstSnapshot.current && s.offlineGain >= 1000)
-        setNotice(
-          `Ton équipe a gagné ${num(s.offlineGain / 1000)} points pendant ton absence.`,
-        );
-      firstSnapshot.current = false;
-      accept(s);
+  const [journey, setJourney] = useState(false);
+  const motion = useReducedMotion();
+  const heading = useRef<HTMLHeadingElement>(null);
+  const navigate = (next: Tab) => {
+    setTab(next);
+    setEditing(false);
+    window.scrollTo({
+      top: 0,
+      behavior: motion.reduced ? "instant" : "smooth",
     });
-  const enqueue = (job: () => Promise<void>) => {
-    chain.current = chain.current.then(job).catch((e) => setError(e.message));
+    requestAnimationFrame(() =>
+      heading.current?.focus({ preventScroll: true }),
+    );
   };
   useEffect(() => {
-    api<{ profile: Profile | null }>("/session", "POST")
-      .then(async (r) => {
-        setProfile(r.profile);
-        if (r.profile) await refresh();
-      })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
-  useEffect(() => {
-    const t = setInterval(() => setClock((c) => c + 1000), 1000);
-    return () => clearInterval(t);
-  }, []);
-  useEffect(() => {
-    if (!profile) return;
-    const t = setInterval(() => {
-      if (!document.hidden) enqueue(refresh);
-    }, 10000);
-    return () => clearInterval(t);
-  }, [profile]);
-  useEffect(() => {
-    if (!submission) return;
-    let live = true;
-    const check = async () => {
-      try {
-        const r = await api<{ replicated: boolean }>(
-          `/profile/submissions/${submission}`,
-        );
-        if (live && r.replicated) {
-          setSubmission(null);
-          setNotice("Fiche enregistrée dans les deux bases.");
-        }
-      } catch (e) {
-        if (live)
-          setNotice(
-            "Ta fiche est conservée. La confirmation des deux bases est momentanément indisponible.",
-          );
-      }
-    };
-    void check();
-    const t = setInterval(check, 2500);
-    return () => {
-      live = false;
-      clearInterval(t);
-    };
-  }, [submission]);
-  function send(action: Action, key: string = uuid()) {
-    enqueue(async () => {
-      if (failed.current) return;
-      requestBusy.current = true;
-      setBusy(true);
-      setError("");
-      try {
-        accept(await api<Snapshot>("/actions", "POST", action, key));
-      } catch (e) {
-        failed.current = { action, key };
-        setRetryAvailable(true);
-        throw e;
-      } finally {
-        requestBusy.current = false;
-        setBusy(false);
-      }
-    });
-  }
-  useEffect(() => {
-    const t = setInterval(() => {
-      if (clicks.current && !failed.current && !requestBusy.current) {
-        const count = clicks.current;
-        clicks.current = 0;
-        setPendingClicks(0);
-        send({ type: "click", count });
-      }
-    }, 500);
-    return () => clearInterval(t);
-  }, []);
-  function act(action: Action) {
-    if (clicks.current) {
-      const count = clicks.current;
-      clicks.current = 0;
-      setPendingClicks(0);
-      send({ type: "click", count });
-    }
-    send(action);
-  }
-  function retry() {
-    const f = failed.current;
-    if (f) {
-      failed.current = null;
-      setRetryAvailable(false);
-      send(f.action, f.key);
-    }
-  }
-  function dismiss() {
-    failed.current = null;
-    setRetryAvailable(false);
-    setError("");
-    enqueue(refresh);
-  }
-  async function save(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const data = new FormData(e.currentTarget);
-    const value = {
-      nickname: String(data.get("nickname")),
-      associationId: String(data.get("associationId")),
-      presentation: String(data.get("presentation")),
-    };
-    setSaving(true);
-    setError("");
-    formKey.current ||= uuid();
-    try {
-      const r = await api<{
-        profile: Profile;
-        submissionId: string;
-        replicated: boolean;
-      }>("/profile", "PUT", value, formKey.current);
-      setProfile(r.profile);
-      setSubmission(r.replicated ? null : r.submissionId);
-      setNotice(
-        r.replicated
-          ? "Fiche enregistrée dans les deux bases."
-          : "Enregistrement en cours dans les deux bases…",
-      );
-      formKey.current = null;
-      setEditing(false);
-      setHistoryLoaded(false);
-      await refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-  async function loadHistory() {
-    try {
-      setHistory(await api<Submission[]>("/profile/history"));
-      setHistoryLoaded(true);
-      setError("");
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-  const g = snapshot?.game;
-  const c = snapshot?.catalog;
-  const form = (
-    <form
-      className="profile-form"
-      onSubmit={save}
-      onChange={() => {
-        formKey.current = null;
-      }}
-    >
-      <label>
-        Ton pseudo
-        <input
-          name="nickname"
-          minLength={2}
-          maxLength={32}
-          required
-          defaultValue={profile?.nickname}
-          placeholder="Le futur prez"
-          autoComplete="nickname"
-        />
-      </label>
-      <fieldset>
-        <legend>Ton asso de cœur</legend>
-        <div className="association-choices">
-          {Object.entries(names).map(([id, name]) => (
-            <label className="association-option" key={id}>
-              <input
-                type="radio"
-                name="associationId"
-                value={id}
-                required
-                defaultChecked={
-                  profile ? profile.associationId === id : id === "lebarc"
-                }
-                disabled={!!profile && profile.associationId !== id}
-              />
-              <span className="asso-symbol">{icons[id]}</span>
-              <strong>{name}</strong>
-              <small>
-                {id === "lebarc"
-                  ? "Projets plus rapides"
-                  : id === "bakaclub"
-                    ? "Plus de réputation"
-                    : "Plus de gains passifs"}
-              </small>
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      <label>
-        Pourquoi tu rejoins cette asso ?
-        <textarea
-          name="presentation"
-          minLength={10}
-          maxLength={500}
-          required
-          rows={3}
-          defaultValue={profile?.presentation}
-          placeholder="Je venais juste à la réunion…"
-        />
-        <small>
-          10 à 500 caractères. Invente ton personnage, pas besoin de ton
-          identité réelle.
-        </small>
-      </label>
-      <button className="primary" disabled={saving}>
-        {saving
-          ? "Enregistrement…"
-          : profile
-            ? "Enregistrer ma fiche"
-            : "Entrer dans la vie associative →"}
-      </button>
-      {profile && (
+    if (tab === "fiche" && game.profile) void game.loadHistory();
+  }, [tab, game.profile, game.loadHistory]);
+  const s = game.snapshot;
+  const g = s?.game;
+  const c = s?.catalog;
+  const ready = g?.runs.filter((r) => r.endsAt <= game.clock).length || 0;
+  const alerts = game.error && (
+    <div className="error-banner" role="alert">
+      <Icon name="bolt" />
+      <div>
+        <strong>L’action n’a pas pu être confirmée.</strong>
+        <p>{game.error}</p>
+      </div>
+      {game.failed ? (
+        <>
+          <button className="button small" onClick={game.retry}>
+            Réessayer la même action
+          </button>
+          <button
+            className="icon-button"
+            onClick={game.dismissError}
+            aria-label="Fermer et actualiser"
+          >
+            <Icon name="close" />
+          </button>
+        </>
+      ) : (
         <button
-          type="button"
-          className="quiet"
-          onClick={() => setEditing(false)}
+          className="button small"
+          onClick={() => {
+            game.dismissError();
+            if (!game.profile) location.reload();
+          }}
         >
-          Annuler
+          Actualiser
         </button>
       )}
-    </form>
+    </div>
   );
+  if (game.loading)
+    return (
+      <div className="loading-screen">
+        <Brand />
+        <span className="spinner" />
+        <h1>On ouvre le local…</h1>
+        <p>Ta vie associative reprend dans un instant.</p>
+      </div>
+    );
   return (
-    <>
-      <header className="topbar">
-        <a className="brand" href="/">
-          cli<span>ii</span>cker<span className="brand-dot">✳</span>
-        </a>
-        <span className="top-label">LA VIE ASSO, VERSION IDLE</span>
-        <span className="solo">
-          <i /> Partie solo
-        </span>
-      </header>
-      <main>
-        {error && (
-          <div className="alert" role="alert">
-            {error}{" "}
-            {retryAvailable ? (
-              <>
-                <button onClick={retry}>Réessayer la même action</button>
-                <button onClick={dismiss}>Fermer et actualiser</button>
-              </>
-            ) : (
-              <button onClick={() => location.reload()}>Recharger</button>
-            )}
-          </div>
-        )}
-        {loading ? (
-          <div className="loading">On retrouve les clés du local…</div>
-        ) : !profile ? (
-          <div className="welcome">
-            <section>
-              <p className="eyebrow">BIENVENUE À L’ENSIIE</p>
+    <div className={motion.reduced ? "app reduced-motion" : "app"}>
+      {!game.profile ? (
+        <>
+          <header className="welcome-header">
+            <Brand />
+            <span className="solo-label">
+              <span className="live-dot" />
+              Un jeu solo. À ton rythme.
+            </span>
+          </header>
+          <main className="onboarding">
+            {alerts}
+            <section className="welcome-story">
+              <span className="eyebrow">ENSIIE · LA VIE ASSO COMMENCE ICI</span>
               <h1>
-                Tu venais juste
-                <br />à une réunion.
+                Petite réunion.
+                <br />
+                Grandes <span>ambitions.</span>
               </h1>
-              <p className="lead">
-                Un stand. Une asso. Toute une promo.
+              <p>
+                Du premier stand à la présidence du BdE.
                 <br />
-                Et si le prochain prez du BdE, c’était toi ?
+                Fais-toi une place, une équipe et un nom.
               </p>
-              <div className="welcome-stamp">
-                7 rôles
-                <br />
-                <strong>Une aventure</strong>
-                <br />à ton rythme
+              <div className="welcome-scene">
+                <Scene />
+                <span className="floating-sticker">
+                  <Icon name="trophy" />
+                  Futur prez ?
+                </span>
               </div>
-              <p className="muted">
-                Quelques minutes par jour. Ton équipe continue pendant ton
-                absence.
-              </p>
+              <div className="welcome-perks">
+                <span>
+                  <Icon name="clock" />
+                  Quelques minutes par jour
+                </span>
+                <span>
+                  <Icon name="bolt" />
+                  Ton équipe travaille hors ligne
+                </span>
+              </div>
             </section>
-            <section className="paper">
-              <div className="paper-heading">
-                <span>01 / LA FICHE</span>
-                <span>✎</span>
+            <section className="onboarding-card">
+              <div className="section-kicker">
+                <span className="number-tag">01</span> TA NOUVELLE AVENTURE
               </div>
               <h2>Tout commence par toi.</h2>
-              {form}
+              <p className="muted">
+                Une fiche, une asso. Et beaucoup de choses à faire.
+              </p>
+              <ProfileForm game={game} onSaved={() => setTab("campus")} />
+              <p className="privacy-note">
+                <Icon name="lock" size={13} />
+                Pas d’inscription. Ta partie reste dans ce navigateur.
+              </p>
             </section>
-          </div>
-        ) : !snapshot ? (
-          <section className="paper">
-            <h2>Retrouvons ta partie.</h2>
-            <button className="primary" onClick={() => enqueue(refresh)}>
-              Charger la sauvegarde
-            </button>
-          </section>
-        ) : (
-          <>
-            <div className="player-heading">
-              <div>
-                <p className="eyebrow">
-                  PROMO ENSIIE / {names[g!.associationId]}
-                </p>
-                <h1>
-                  Salut, {profile.nickname}
-                  <span className="handwave">✳</span>
-                </h1>
-                <p className="muted">
-                  {c!.roles[g!.role].name} ·{" "}
-                  {g!.role < 4
-                    ? "Une petite asso, de grandes idées."
-                    : "Le campus compte sur toi."}
-                </p>
-              </div>
-              <button
-                className="profile-chip"
-                onClick={() => {
-                  setTab("fiche");
-                  setEditing(true);
-                }}
-              >
-                {icons[g!.associationId]} Ma fiche ↗
-              </button>
-            </div>
-            {snapshot.demo && (
-              <div className="demo-banner">
-                MODE SOUTENANCE · Temps et gains passifs × 3 600 · Partie
-                distincte
-              </div>
-            )}
-            {notice && (
-              <div className="notice" role="status">
-                {submission ? "◌" : "✓"} {notice}
-              </div>
-            )}
-            <section className="stats" aria-label="Ressources">
-              <div>
-                <span>IMPLICATION</span>
-                <strong>
-                  {num(g!.implication / 1000)} <small>pts</small>
-                </strong>
-                <em>
-                  +{num(snapshot.rate / 1000)} / seconde
-                  {snapshot.demo ? " × 3 600" : ""}
-                </em>
-              </div>
-              <div>
-                <span>RÉPUTATION</span>
-                <strong>
-                  {num(g!.reputation)} <small>★</small>
-                </strong>
-                <em>Les projets font parler de toi</em>
-              </div>
-              <div>
-                <span>TON PARCOURS</span>
-                <strong>
-                  {g!.role + 1}
-                  <small> / 7</small>
-                </strong>
-                <em>
-                  {g!.role === 6
-                    ? "Bienvenue à la présidence !"
-                    : `Prochaine étape : ${c!.roles[g!.role + 1].name}`}
-                </em>
-              </div>
-            </section>
-            <nav className="tabs" aria-label="Navigation du jeu">
-              {[
-                ["campus", "Mon campus"],
-                ["projets", "Les projets"],
-                ["equipe", "Mon équipe"],
-                ["journal", "La vie asso"],
-                ["fiche", "Ma fiche"],
-              ].map(([id, label]) => (
+          </main>
+        </>
+      ) : (
+        <div className="game-shell">
+          <aside className="sidebar">
+            <Brand />
+            <div className="sidebar-label">TON AVENTURE</div>
+            <nav aria-label="Navigation principale">
+              {tabs.map((t) => (
                 <button
-                  key={id}
-                  aria-current={tab === id ? "page" : undefined}
-                  onClick={() => {
-                    setTab(id);
-                    setEditing(false);
-                  }}
+                  key={t.id}
+                  aria-label={t.label}
+                  aria-current={tab === t.id ? "page" : undefined}
+                  className={`nav-item ${tab === t.id ? "active" : ""}`}
+                  onClick={() => navigate(t.id)}
                 >
-                  {label}
+                  <Icon name={t.icon} />
+                  <span className="nav-label">{t.label}</span>
+                  <span className="mobile-label">{t.short}</span>
+                  {((t.id === "projets" && ready > 0) ||
+                    (t.id === "journal" && g?.event)) && (
+                    <span className="nav-badge">
+                      {t.id === "projets" ? ready : "1"}
+                    </span>
+                  )}
                 </button>
               ))}
             </nav>
-            {tab === "campus" && (
-              <div className="campus-grid">
-                <section className="scene-card">
-                  <div className="scene-top">
-                    <span>LE LOCAL · NIVEAU {g!.role + 1}</span>
-                    <span>{names[g!.associationId]}</span>
-                  </div>
-                  <div
-                    className={`scene stage-${Math.min(g!.role, 3)}`}
-                    aria-hidden="true"
+            <div className="sidebar-bottom">
+              <div className="solo-card">
+                <span className="live-dot" />
+                <span>
+                  Partie solo
+                  <br />
+                  <small>Tout commence par un clic.</small>
+                </span>
+              </div>
+              <button
+                className="motion-toggle"
+                aria-label="Réduire les animations"
+                aria-pressed={motion.manual}
+                onClick={motion.toggle}
+              >
+                <Icon name="settings" size={16} />
+                <span>
+                  {motion.reduced
+                    ? "Animations réduites"
+                    : "Réduire les animations"}
+                </span>
+              </button>
+              <div className="sidebar-player">
+                <AssoMark id={game.profile.associationId} />
+                <div>
+                  <strong>{game.profile.nickname}</strong>
+                  <small>{names[game.profile.associationId]}</small>
+                </div>
+              </div>
+            </div>
+          </aside>
+          <div className="workspace">
+            <header className="resource-bar">
+              <div className="resource implication">
+                <span className="resource-icon">
+                  <Icon name="bolt" />
+                </span>
+                <div>
+                  <small>IMPLICATION</small>
+                  <strong
+                    data-testid="implication"
+                    title="Estimation visuelle, confirmée par le serveur"
                   >
-                    <div className="poster">
-                      <small>OBJECTIF</small>
-                      <b>{g!.role >= 4 ? "BdE" : "LA VIE\nASSO"}</b>
-                      <span>ça commence ici ↗</span>
+                    {num(game.estimate)}
+                    <span> pts</span>
+                  </strong>
+                </div>
+                <span className="income">
+                  +{num(((s?.rate || 0) / 1000) * (s?.demo ? 3600 : 1))}/s
+                </span>
+              </div>
+              <div className="resource reputation">
+                <span className="resource-icon">
+                  <Icon name="star" />
+                </span>
+                <div>
+                  <small>RÉPUTATION</small>
+                  <strong>
+                    {num(g?.reputation || 0)}
+                    <span> pts</span>
+                  </strong>
+                </div>
+              </div>
+              <div className="resource-side">
+                <span
+                  className={`save-state ${game.failed ? "disconnected" : ""}`}
+                  role="status"
+                >
+                  <span className="live-dot" />
+                  {game.failed
+                    ? "À vérifier"
+                    : game.busy || game.pendingClicks
+                      ? "Envoi…"
+                      : "À jour"}
+                </span>
+                <button
+                  className="level-chip"
+                  aria-label={`Voir mon parcours, rang ${(g?.role || 0) + 1} sur 7`}
+                  onClick={() => setJourney(true)}
+                >
+                  <Icon name="trophy" size={16} />
+                  <span>
+                    Rang {(g?.role || 0) + 1}
+                    <small>/7</small>
+                  </span>
+                </button>
+              </div>
+            </header>
+            <main id="content" className="game-main">
+              {alerts}
+              {s?.demo && (
+                <div className="demo-banner">
+                  <Icon name="bolt" size={15} />
+                  MODE SOUTENANCE{" "}
+                  <span>Temps et gains × 3 600 · partie distincte</span>
+                </div>
+              )}
+              {!s ? (
+                <section className="panel empty-state">
+                  <Icon name="campus" size={32} />
+                  <h1>Retrouvons ta partie.</h1>
+                  <button className="button primary" onClick={game.refresh}>
+                    Charger la sauvegarde
+                  </button>
+                </section>
+              ) : (
+                <>
+                  <div className="page-heading">
+                    <div>
+                      <p className="eyebrow">
+                        {names[g!.associationId]}{" "}
+                        <span className="heading-dot">/</span>{" "}
+                        {c!.roles[g!.role].name}
+                      </p>
+                      <h1 ref={heading} tabIndex={-1}>
+                        {tab === "campus" ? (
+                          <>
+                            Salut, {game.profile.nickname}
+                            <span className="hello-spark">✦</span>
+                          </>
+                        ) : tab === "projets" ? (
+                          "Les idées deviennent des projets."
+                        ) : tab === "equipe" ? (
+                          "Les bonnes personnes, ensemble."
+                        ) : tab === "journal" ? (
+                          "Ça bouge dans les assos."
+                        ) : (
+                          "Ton histoire commence ici."
+                        )}
+                      </h1>
+                      <p className="page-subtitle">
+                        {tab === "campus"
+                          ? "Ton local. Ton équipe. La prochaine grande idée."
+                          : tab === "projets"
+                            ? "Choisis une mission, confie-la à ton équipe, récolte la réputation."
+                            : tab === "equipe"
+                              ? "Trois talents, trois façons de faire avancer tes projets."
+                              : tab === "journal"
+                                ? "Les petits imprévus font les grandes histoires."
+                                : "Une présentation qui évolue avec ton aventure."}
+                      </p>
                     </div>
-                    <div className="board">
-                      {g!.role === 6
-                        ? "ON L’A FAIT !"
-                        : g!.role >= 3
-                          ? "LE GRAND PROJET"
-                          : "RÉUNION À 18H"}
-                      <div className="sticky">
-                        {g!.role >= 2
-                          ? "penser au budget"
-                          : "ramener du scotch"}
-                      </div>
-                    </div>
-                    <div className="plant">♧</div>
-                    <div className="desk">
-                      <div className="laptop">
-                        <span>{icons[g!.associationId]}</span>
-                      </div>
-                      <div className="mug">☕</div>
-                      <div className="papers" />
-                    </div>
-                    <div className="floor" />
+                    {tab === "campus" && (
+                      <button
+                        className="button ghost journey-button"
+                        onClick={() => setJourney(true)}
+                      >
+                        Mon parcours
+                        <Icon name="arrow" size={16} />
+                      </button>
+                    )}
                   </div>
-                  <div className="click-area">
-                    <span className="eyebrow">
-                      UN PETIT GESTE, UN GRAND DÉBUT
+                  {game.offlineGain >= 1000 && (
+                    <div className="offline-card">
+                      <span className="offline-icon">
+                        <Icon name="spark" />
+                      </span>
+                      <div>
+                        <strong>Ça a travaillé pendant ton absence.</strong>
+                        <p>
+                          Ton équipe a produit{" "}
+                          <b>+{num(game.offlineGain / 1000)} implication</b>.
+                          Bienvenue au local !
+                        </p>
+                      </div>
+                      <button
+                        className="icon-button"
+                        onClick={game.clearOffline}
+                        aria-label="Fermer le bilan d’absence"
+                      >
+                        <Icon name="close" size={18} />
+                      </button>
+                    </div>
+                  )}
+                  <div className="page-content" key={tab}>
+                    {tab === "campus" && (
+                      <Campus
+                        game={game}
+                        navigate={navigate}
+                        reduced={motion.reduced}
+                        openJourney={() => setJourney(true)}
+                      />
+                    )}
+                    {tab === "projets" && <Projects game={game} />}
+                    {tab === "equipe" && <Team game={game} />}
+                    {tab === "journal" && <Journal game={game} />}
+                    {tab === "fiche" && (
+                      <div className="profile-grid">
+                        <section className="panel">
+                          <div className="profile-cover">
+                            <AssoMark id={g!.associationId} />
+                            <span>FICHE D’IIENS</span>
+                          </div>
+                          <div className="panel-body">
+                            <h2>{game.profile.nickname}</h2>
+                            {editing ? (
+                              <ProfileForm
+                                game={game}
+                                onSaved={() => {
+                                  setEditing(false);
+                                  void game.loadHistory();
+                                }}
+                                onCancel={() => setEditing(false)}
+                              />
+                            ) : (
+                              <>
+                                <span className="tag">
+                                  {names[g!.associationId]}
+                                </span>
+                                <p className="presentation">
+                                  {game.profile.presentation}
+                                </p>
+                                <button
+                                  className="button secondary"
+                                  onClick={() => setEditing(true)}
+                                >
+                                  Modifier ma présentation
+                                  <Icon name="arrow" size={16} />
+                                </button>
+                              </>
+                            )}
+                            <p className="profile-status" role="status">
+                              {game.submission ? (
+                                <span className="spinner" />
+                              ) : (
+                                <Icon name="check" size={15} />
+                              )}{" "}
+                              {game.profileStatus ||
+                                "Ta fiche est sauvegardée."}
+                            </p>
+                            <button
+                              className="text-button mobile-preferences"
+                              aria-pressed={motion.manual}
+                              onClick={motion.toggle}
+                            >
+                              <Icon name="settings" size={16} />
+                              {motion.reduced
+                                ? "Animations réduites"
+                                : "Réduire les animations"}
+                            </button>
+                          </div>
+                        </section>
+                        <section className="panel panel-body">
+                          <div className="section-heading">
+                            <div>
+                              <span className="eyebrow">
+                                AU FIL DES VERSIONS
+                              </span>
+                              <h2>Tu as fait du chemin.</h2>
+                            </div>
+                            <button
+                              className="icon-button"
+                              aria-label="Actualiser l’historique"
+                              onClick={game.loadHistory}
+                              disabled={game.historyLoading}
+                            >
+                              <Icon name="clock" />
+                            </button>
+                          </div>
+                          {game.historyLoading && (
+                            <p role="status" className="muted">
+                              Chargement de ton histoire…
+                            </p>
+                          )}
+                          {!game.historyLoading && !game.history.length && (
+                            <div className="empty-state">
+                              <Icon name="journal" size={30} />
+                              <p>
+                                La première page arrive.
+                                <br />
+                                Elle apparaîtra dès la confirmation de ta fiche.
+                              </p>
+                            </div>
+                          )}
+                          {game.history.map((h) => (
+                            <article
+                              className="history-entry"
+                              key={h.submissionId}
+                            >
+                              <span className="history-dot" />
+                              <div>
+                                <span className="eyebrow">
+                                  VERSION {h.revision} ·{" "}
+                                  {new Date(h.createdAt).toLocaleDateString(
+                                    "fr-FR",
+                                  )}
+                                </span>
+                                <h3>{h.nickname}</h3>
+                                <p className="presentation">{h.presentation}</p>
+                              </div>
+                            </article>
+                          ))}
+                        </section>
+                      </div>
+                    )}
+                  </div>
+                  <footer className="game-footer">
+                    <span>
+                      Imaginé autour de l’ENSIIE. Scénarios fictifs, motivation
+                      réelle.
                     </span>
-                    <button
-                      className="click-button"
-                      disabled={retryAvailable}
-                      onClick={() => {
-                        if (clicks.current < 10) {
-                          clicks.current++;
-                          setPendingClicks(clicks.current);
-                        }
-                      }}
-                    >
-                      S’impliquer <span>+1</span>
-                    </button>
+                    <span>
+                      <Icon name="lock" size={12} />
+                      Ta progression est sauvegardée automatiquement
+                    </span>
+                  </footer>
+                </>
+              )}
+            </main>
+          </div>
+        </div>
+      )}
+      {game.toast && (
+        <div className="toast" role="status" key={game.toast.id}>
+          <span>
+            <Icon name="check" size={18} />
+          </span>
+          {game.toast.text}
+        </div>
+      )}
+      {game.promotion && (
+        <Modal
+          title="Promotion obtenue"
+          onClose={game.closePromotion}
+          className="promotion-modal"
+        >
+          <div className="celebration" aria-hidden="true">
+            {Array.from({ length: 12 }, (_, i) => (
+              <i key={i} style={{ "--i": i } as React.CSSProperties} />
+            ))}
+            <span>
+              <Icon name="trophy" size={48} />
+            </span>
+          </div>
+          <p className="eyebrow">NOUVEAU CHAPITRE DÉBLOQUÉ</p>
+          <h2>{game.promotion}</h2>
+          <p>
+            Une réunion de plus, un rôle de plus.
+            <br />
+            La promo commence à connaître ton nom.
+          </p>
+          <button
+            className="button primary"
+            autoFocus
+            onClick={game.closePromotion}
+          >
+            C’est parti !<Icon name="arrow" />
+          </button>
+        </Modal>
+      )}
+      {journey && s && (
+        <Modal
+          title="Mon parcours jusqu’au BdE"
+          onClose={() => setJourney(false)}
+        >
+          <p className="eyebrow">DE LA PROMO AU BdE</p>
+          <h2>Chaque étape compte.</h2>
+          <ol className="journey-list">
+            {c!.roles.map((r, i) => (
+              <li key={r.name} className={i <= g!.role ? "reached" : ""}>
+                <span className="journey-step">
+                  {i < g!.role ? <Icon name="check" size={17} /> : i + 1}
+                </span>
+                <div>
+                  <strong>{r.name}</strong>
+                  <small>
+                    {i === g!.role
+                      ? "Tu es ici"
+                      : i < g!.role
+                        ? "Accompli"
+                        : `${r.reputation} réputation · ${r.distinct} projets distincts`}
+                  </small>
+                </div>
+                {i === g!.role && <span className="tag lime">ACTUEL</span>}
+              </li>
+            ))}
+          </ol>
+        </Modal>
+      )}
+    </div>
+  );
+}
+function Runs({
+  game,
+  compact = false,
+}: {
+  game: GameController;
+  compact?: boolean;
+}) {
+  const s = game.snapshot!;
+  const runs = s.game.runs;
+  return (
+    <div className={`runs ${compact ? "compact" : ""}`}>
+      {runs.map((r) => {
+        const ready = r.endsAt <= game.clock;
+        const progress = Math.max(
+          0,
+          Math.min(
+            100,
+            ((game.clock - r.startedAt) / Math.max(1, r.endsAt - r.startedAt)) *
+              100,
+          ),
+        );
+        return (
+          <article className={`run-card ${ready ? "ready" : ""}`} key={r.id}>
+            <span className="run-icon">
+              <Icon name={ready ? "check" : "projects"} />
+            </span>
+            <div className="run-info">
+              <div className="run-title">
+                <h3>{r.name}</h3>
+                <span className={`tag ${ready ? "lime" : ""}`}>
+                  {ready ? "Terminé" : duration((r.endsAt - game.clock) / 1000)}
+                </span>
+              </div>
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-label={`Avancement : ${r.name}`}
+                aria-valuenow={Math.round(progress)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <span style={{ width: `${progress}%` }} />
+              </div>
+              <small>
+                +{r.reputation} réputation
+                {r.member ? " · Équipier affecté" : ""}
+              </small>
+            </div>
+            <button
+              className={`button small ${ready ? "primary" : "ghost"}`}
+              disabled={!ready || game.busy || !!game.failed}
+              onClick={() => game.act({ type: "claim", id: r.id })}
+            >
+              {ready ? "Récupérer" : <Icon name="clock" size={17} />}
+            </button>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+function Campus({
+  game,
+  navigate,
+  reduced,
+  openJourney,
+}: {
+  game: GameController;
+  navigate: (t: Tab) => void;
+  reduced: boolean;
+  openJourney: () => void;
+}) {
+  const s = game.snapshot!;
+  const g = s.game;
+  const c = s.catalog;
+  const [particles, setParticles] = useState<{ id: number; x: number }[]>([]);
+  const serial = useRef(0);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [pulse, setPulse] = useState(0);
+  const [showLocked, setShowLocked] = useState(false);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const addClick = () => {
+    if (!game.click()) return;
+    setPulse((n) => n + 1);
+    if (reduced) return;
+    const id = ++serial.current;
+    setParticles((p) => [...p, { id, x: 25 + Math.random() * 50 }]);
+    const t = setTimeout(() => {
+      setParticles((p) => p.filter((item) => item.id !== id));
+      timers.current = timers.current.filter((x) => x !== t);
+    }, 800);
+    timers.current.push(t);
+  };
+  const next = c.roles[g.role + 1];
+  const nextReady = !!next && !s.requirements.length;
+  const ready = g.runs.filter((r) => r.endsAt <= game.clock).length;
+  const suggested = c.projects.find(
+    (p) =>
+      p.role <= g.role &&
+      (!p.association || p.association === g.associationId) &&
+      !g.completed.includes(p.id) &&
+      !g.runs.some((r) => r.projectId === p.id),
+  );
+  const affordable = c.upgrades.filter(
+    (u) =>
+      u.role <= g.role &&
+      (g.upgrades[u.id] || 0) < 50 &&
+      Math.ceil(u.cost * 1.15 ** (g.upgrades[u.id] || 0)) <= game.estimate,
+  ).length;
+  return (
+    <>
+      <div className="dashboard-grid">
+        <section className="clicker-hero">
+          <div className="hero-topline">
+            <span className="hero-label">
+              <span className="live-dot" />
+              LE LOCAL EST OUVERT
+            </span>
+            <span className="hero-association">
+              <AssoMark id={g.associationId} />
+              {names[g.associationId]}
+            </span>
+          </div>
+          <div className="hero-copy">
+            <span className="eyebrow">UN CLIC PEUT TOUT CHANGER</span>
+            <h2>
+              {g.role >= 4 ? (
+                <>
+                  Fais vibrer
+                  <br />
+                  <em>toute la promo.</em>
+                </>
+              ) : (
+                <>
+                  Les grandes idées
+                  <br />
+                  commencent <em>ici.</em>
+                </>
+              )}
+            </h2>
+            <p>
+              {g.role >= 2
+                ? "Ton équipe prend de l’ampleur. Donne le rythme."
+                : "Un coup de main aujourd’hui. Une asso qui grandit demain."}
+            </p>
+          </div>
+          <Scene role={g.role} association={g.associationId} />
+          <div className="hero-bottom">
+            <div className="click-target">
+              <button
+                className={`click-button ${pulse % 2 ? "tap-a" : "tap-b"}`}
+                disabled={!!game.failed}
+                onClick={addClick}
+              >
+                <Icon name="bolt" size={23} />
+                <span>S’impliquer</span>
+                <b>+1</b>
+              </button>
+              <div className="click-particles" aria-hidden="true">
+                {particles.map((p) => (
+                  <span key={p.id} style={{ left: `${p.x}%` }}>
+                    +1 ✦
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="click-caption">
+              <span>
+                {game.pendingClicks
+                  ? `${game.pendingClicks} clic(s) en cours d’envoi`
+                  : "Clic ou Entrée · +1 implication"}
+              </span>
+              <span>
+                <Icon name="bolt" size={12} />
+                {num((s.rate / 1000) * (s.demo ? 3600 : 1))}/s en automatique
+              </span>
+            </div>
+          </div>
+        </section>
+        <section className="goal-card">
+          <div className="goal-top">
+            <span className="eyebrow">TON PROCHAIN CHAPITRE</span>
+            <button
+              className="icon-button"
+              onClick={openJourney}
+              aria-label="Voir tout mon parcours"
+            >
+              <Icon name="arrow" size={18} />
+            </button>
+          </div>
+          <div className="goal-medal">
+            <Icon name="trophy" size={28} />
+            <span>{g.role === 6 ? "7" : g.role + 2}</span>
+          </div>
+          <h2>{next?.name || "Prez du BdE. Ça y est."}</h2>
+          <p className="goal-description">
+            {g.role === 6
+              ? "Du premier flyer au bureau du BdE. La promo se souviendra de toi."
+              : "Construis ta réputation, un projet à la fois."}
+          </p>
+          {next ? (
+            <>
+              <div className="goal-progress-label">
+                <span>Réputation</span>
+                <strong>
+                  {g.reputation}
+                  <small> / {next.reputation}</small>
+                </strong>
+              </div>
+              <progress
+                value={Math.min(g.reputation, next.reputation)}
+                max={next.reputation}
+                aria-label="Réputation pour la prochaine promotion"
+              />
+              <div className="goal-tasks">
+                <div className={g.reputation >= next.reputation ? "done" : ""}>
+                  <Icon
+                    name={g.reputation >= next.reputation ? "check" : "star"}
+                    size={15}
+                  />
+                  {next.reputation} points de réputation
+                </div>
+                <div
+                  className={g.completed.length >= next.distinct ? "done" : ""}
+                >
+                  <Icon
+                    name={
+                      g.completed.length >= next.distinct ? "check" : "projects"
+                    }
+                    size={15}
+                  />
+                  {Math.min(g.completed.length, next.distinct)} /{" "}
+                  {next.distinct} projets distincts
+                </div>
+                {next.required.map((tag) => (
+                  <div key={tag} className={g.tags.includes(tag) ? "done" : ""}>
+                    <Icon
+                      name={g.tags.includes(tag) ? "check" : "lock"}
+                      size={15}
+                    />
+                    {c.projects.find((p) => p.tag === tag)?.name}
+                  </div>
+                ))}
+              </div>
+              <button
+                className={`button ${nextReady ? "primary" : "secondary"}`}
+                disabled={!nextReady || game.busy || !!game.failed}
+                onClick={() => game.act({ type: "promote" })}
+              >
+                {g.role === 5 ? "Lancer l’élection" : "Passer au rôle suivant"}
+                <Icon name={nextReady ? "arrow" : "lock"} size={16} />
+              </button>
+            </>
+          ) : (
+            <>
+              <p>
+                <b>{g.completed.length}</b> projets différents ·{" "}
+                <b>{g.members.length}</b> équipiers
+              </p>
+              <button className="button primary" onClick={openJourney}>
+                Revoir mon parcours
+                <Icon name="trophy" size={16} />
+              </button>
+            </>
+          )}
+        </section>
+      </div>
+      <div className="next-action">
+        <span className="next-action-icon">
+          <Icon name={ready ? "check" : nextReady ? "trophy" : "spark"} />
+        </span>
+        <div>
+          <span className="eyebrow">ON FAIT QUOI MAINTENANT ?</span>
+          <strong>
+            {ready
+              ? `${ready} projet${ready > 1 ? "s" : ""} terminé${ready > 1 ? "s" : ""} t’attend${ready > 1 ? "ent" : ""}.`
+              : nextReady
+                ? "Tout est prêt pour ta prochaine promotion."
+                : suggested
+                  ? `Prochaine idée : ${suggested.name}`
+                  : "Ton équipe peut préparer un nouveau projet."}
+          </strong>
+        </div>
+        <button
+          className="button ghost"
+          onClick={() =>
+            ready || !nextReady
+              ? navigate("projets")
+              : document.querySelector(".goal-card")?.scrollIntoView({
+                  behavior: reduced ? "instant" : "smooth",
+                  block: "center",
+                })
+          }
+        >
+          {ready
+            ? "Récupérer les gains"
+            : nextReady
+              ? "Voir ma promotion"
+              : "Voir les projets"}
+          <Icon name="arrow" size={16} />
+        </button>
+      </div>
+      {g.runs.length > 0 && (
+        <section className="dashboard-runs">
+          <div className="section-heading">
+            <h2>
+              Pendant ce temps, au local
+              <span className="count-pill">{g.runs.length}</span>
+            </h2>
+            <button className="text-button" onClick={() => navigate("projets")}>
+              Tous les projets
+              <Icon name="arrow" size={15} />
+            </button>
+          </div>
+          <Runs game={game} compact />
+        </section>
+      )}
+      <section className="upgrade-section">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">MOINS D’EFFORT, PLUS D’IMPACT</span>
+            <h2>Fais tourner ton asso.</h2>
+          </div>
+          <span className="tag">
+            {affordable} amélioration{affordable > 1 ? "s" : ""} abordable
+            {affordable > 1 ? "s" : ""}
+          </span>
+        </div>
+        <div className="upgrade-list">
+          {c.upgrades
+            .filter((u) => showLocked || u.role <= g.role)
+            .map((u, i) => {
+              const level = g.upgrades[u.id] || 0;
+              const cost = Math.ceil(u.cost * 1.15 ** level);
+              const locked = g.role < u.role;
+              const missing = Math.max(0, cost - game.estimate);
+              return (
+                <article
+                  className={`upgrade ${locked ? "locked" : ""}`}
+                  key={u.id}
+                >
+                  <span className={`upgrade-icon tone-${i % 3}`}>
+                    <Icon
+                      name={
+                        (
+                          [
+                            "journal",
+                            "campus",
+                            "settings",
+                            "team",
+                            "projects",
+                          ] as IconName[]
+                        )[i]
+                      }
+                    />
+                  </span>
+                  <div className="upgrade-copy">
+                    <h3>
+                      {u.name}
+                      <span className="level-tag">Niv. {level}</span>
+                    </h3>
+                    <p>{u.description}</p>
                     <small>
-                      {pendingClicks
-                        ? `${pendingClicks} clic(s) en cours d’envoi…`
-                        : "Clic ou touche Entrée · +1 implication"}
+                      <Icon name="bolt" size={12} />+{num(u.rate / 1000)} / s
+                      par niveau
                     </small>
                   </div>
-                </section>
-                <aside className="stack">
-                  <section className="paper promotion">
-                    <p className="eyebrow">LA PROCHAINE ÉTAPE</p>
-                    <h2>
-                      {g!.role === 6
-                        ? "Prez du BdE. Rien que ça."
-                        : c!.roles[g!.role + 1].name}
-                    </h2>
-                    {g!.role === 6 ? (
-                      <>
-                        <p>{profile.presentation}</p>
-                        <p>
-                          {g!.completed.length} projets distincts et{" "}
-                          {g!.members.length} équipiers. La promo se souviendra
-                          de toi.
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <progress
-                          value={Math.min(
-                            g!.reputation,
-                            c!.roles[g!.role + 1].reputation,
-                          )}
-                          max={c!.roles[g!.role + 1].reputation}
-                        />
-                        <p>
-                          {g!.reputation} / {c!.roles[g!.role + 1].reputation}{" "}
-                          réputation
-                        </p>
-                        {snapshot.requirements.length ? (
-                          <ul>
-                            {snapshot.requirements.map((r) => (
-                              <li key={r}>{r}</li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p>Tout est prêt. À toi de jouer !</p>
-                        )}
-                        <button
-                          className="primary"
-                          disabled={
-                            busy ||
-                            retryAvailable ||
-                            !!snapshot.requirements.length
-                          }
-                          onClick={() => act({ type: "promote" })}
-                        >
-                          {g!.role === 5
-                            ? "Lancer l’élection"
-                            : "Passer au rôle suivant"}{" "}
-                          ↗
-                        </button>
-                      </>
-                    )}
-                  </section>
-                  <section className="note-card">
-                    <span>✎ LE CONSEIL DU LOCAL</span>
-                    <p>
-                      {g!.role === 0
-                        ? "20 points pour ton premier planning. Ensuite, ton asso travaille même quand tu fermes l’onglet."
-                        : "Les projets longs sont parfaits pour une journée de cours. Les récompenses t’attendent, sans expiration."}
-                    </p>
-                  </section>
-                </aside>
-                <section className="upgrades">
-                  <div className="section-title">
-                    <h2>Un peu mieux organisé.</h2>
-                    <span>PRODUCTION PASSIVE</span>
+                  <div className="upgrade-purchase">
+                    <button
+                      className={`button ${!missing && !locked ? "secondary" : "ghost"}`}
+                      disabled={
+                        game.busy ||
+                        !!game.failed ||
+                        locked ||
+                        missing > 0 ||
+                        level >= 50
+                      }
+                      onClick={() => game.act({ type: "buy", id: u.id })}
+                    >
+                      {locked ? (
+                        <>
+                          <Icon name="lock" size={15} />
+                          Verrouillé
+                        </>
+                      ) : level >= 50 ? (
+                        "Au maximum"
+                      ) : (
+                        <>
+                          <Icon name="bolt" size={14} />
+                          {num(cost)}
+                          <span>Améliorer</span>
+                        </>
+                      )}
+                    </button>
+                    <small>
+                      {locked
+                        ? `Dès ${c.roles[u.role].name}`
+                        : level >= 50
+                          ? "50 niveaux accomplis"
+                          : missing > 0
+                            ? `Il te manque ${num(missing)} pts`
+                            : "Disponible maintenant"}
+                    </small>
                   </div>
-                  <div className="card-grid">
-                    {c!.upgrades.map((u) => {
-                      const level = g!.upgrades[u.id] || 0;
-                      const cost = Math.ceil(u.cost * 1.15 ** level);
-                      return (
-                        <article className="paper upgrade" key={u.id}>
-                          <span className="card-kicker">
-                            {g!.role < u.role
-                              ? `Dès ${c!.roles[u.role].name}`
-                              : `NIVEAU ${level} / 50`}
-                          </span>
-                          <h3>{u.name}</h3>
-                          <p>{u.description}</p>
-                          <span className="effect">
-                            +{num(u.rate / 1000)} / s par niveau
-                          </span>
-                          <button
-                            disabled={
-                              busy ||
-                              retryAvailable ||
-                              g!.role < u.role ||
-                              g!.implication < cost * 1000 ||
-                              level >= 50
-                            }
-                            onClick={() => act({ type: "buy", id: u.id })}
-                          >
-                            {level >= 50
-                              ? "Au maximum"
-                              : `Améliorer · ${num(cost)} pts`}
-                          </button>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </section>
+                </article>
+              );
+            })}
+        </div>
+        {c.upgrades.some((u) => u.role > g.role) && (
+          <button
+            className="text-button reveal-button"
+            aria-expanded={showLocked}
+            onClick={() => setShowLocked((v) => !v)}
+          >
+            <Icon name="lock" size={14} />
+            {showLocked
+              ? "Masquer les améliorations futures"
+              : `Voir les ${c.upgrades.filter((u) => u.role > g.role).length} améliorations à débloquer`}
+          </button>
+        )}
+      </section>
+    </>
+  );
+}
+function Projects({ game }: { game: GameController }) {
+  const s = game.snapshot!;
+  const g = s.game;
+  const c = s.catalog;
+  const [filter, setFilter] = useState("available");
+  const [search, setSearch] = useState("");
+  const [member, setMember] = useState("");
+  const slots = g.role >= 3 ? 2 : 1;
+  const active = g.runs.filter((r) => r.endsAt > game.clock).length;
+  const projects = c.projects.filter(
+    (p) => !p.association || p.association === g.associationId,
+  );
+  const done = (p: Project) =>
+    !!p.once &&
+    (g.completed.includes(p.id) || g.runs.some((r) => r.projectId === p.id));
+  const shown = projects.filter(
+    (p) =>
+      (filter === "all" ||
+        (filter === "available" && p.role <= g.role && !done(p)) ||
+        (filter === "short" &&
+          p.role <= g.role &&
+          p.seconds <= 3600 &&
+          !done(p)) ||
+        (filter === "campaign" && p.role >= 4) ||
+        (filter === "done" && g.completed.includes(p.id))) &&
+      `${p.name} ${p.description}`
+        .toLocaleLowerCase("fr")
+        .includes(search.toLocaleLowerCase("fr")),
+  );
+  return (
+    <>
+      <section className="projects-active panel panel-body">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">TON ÉQUIPE EST SUR LE COUP</span>
+            <h2>
+              Le tableau de bord
+              <span className="count-pill">
+                {active}/{slots} actif{slots > 1 ? "s" : ""}
+              </span>
+            </h2>
+          </div>
+          {active < slots && (
+            <span className="tag lime">
+              {slots - active} place{slots - active > 1 ? "s" : ""} libre
+              {slots - active > 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
+        {g.runs.length ? (
+          <Runs game={game} />
+        ) : (
+          <div className="empty-inline">
+            <span className="empty-illustration">
+              <Icon name="projects" size={28} />
+            </span>
+            <div>
+              <strong>Une bonne idée attend son équipe.</strong>
+              <p>
+                Lance ton premier projet ci-dessous. Sa récompense t’attendra
+                sans expiration.
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
+      <div className="project-toolbar">
+        <div className="filter-tabs" aria-label="Filtrer les projets">
+          {[
+            ["available", "Accessibles"],
+            ["short", "Rapides"],
+            ["campaign", "Objectif BdE"],
+            ["done", "Accomplis"],
+            ["all", "Tous"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              aria-pressed={filter === id}
+              onClick={() => setFilter(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <label className="search-input">
+          <Icon name="search" size={17} />
+          <span className="sr-only">Rechercher un projet</span>
+          <input
+            placeholder="Chercher une idée…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {search && (
+            <button
+              className="icon-button"
+              onClick={() => setSearch("")}
+              aria-label="Effacer la recherche"
+            >
+              <Icon name="close" size={14} />
+            </button>
+          )}
+        </label>
+      </div>
+      <div className="project-meta-bar">
+        <span>
+          {shown.length} projet{shown.length > 1 ? "s" : ""}
+        </span>
+        <label className="member-select">
+          <Icon name="team" size={16} />
+          <span>Équipier</span>
+          <select
+            aria-label="Équipier pour le prochain projet"
+            value={member}
+            onChange={(e) => setMember(e.target.value)}
+          >
+            <option value="">Sans équipier</option>
+            {c.members
+              .filter((m) => g.members.includes(m.id))
+              .map((m) => (
+                <option
+                  key={m.id}
+                  value={m.id}
+                  disabled={g.runs.some(
+                    (r) => r.member === m.id && r.endsAt > game.clock,
+                  )}
+                >
+                  {m.name}
+                  {g.runs.some(
+                    (r) => r.member === m.id && r.endsAt > game.clock,
+                  )
+                    ? " · occupé"
+                    : ""}
+                </option>
+              ))}
+          </select>
+        </label>
+      </div>
+      <div className="project-grid">
+        {shown.map((p) => {
+          const m = c.members.find((m) => m.id === member);
+          const cost = Math.ceil(p.cost * (m?.effect === "cost" ? 0.9 : 1));
+          const seconds = Math.ceil(
+            (p.seconds *
+              (1 -
+                (g.associationId === "lebarc" ? 0.1 : 0) -
+                (m?.effect === "time" ? 0.1 : 0))) /
+              (s.demo ? 3600 : 1),
+          );
+          const reward = Math.round(
+            p.reputation *
+              (1 +
+                (g.associationId === "bakaclub" ? 0.1 : 0) +
+                (m?.effect === "reputation" ? 0.1 : 0)),
+          );
+          const locked = g.role < p.role;
+          const memberBusy =
+            member &&
+            g.runs.some((r) => r.member === member && r.endsAt > game.clock);
+          const missing = Math.max(0, cost - game.estimate);
+          const reason = locked
+            ? `Dès ${c.roles[p.role].name}`
+            : done(p)
+              ? "Projet unique déjà lancé ou accompli"
+              : active >= slots
+                ? "Tous tes emplacements sont occupés"
+                : memberBusy
+                  ? "Cet équipier travaille déjà sur un projet"
+                  : missing > 0
+                    ? `Il te manque ${num(missing)} implication`
+                    : "";
+          return (
+            <article className={`project ${locked ? "locked" : ""}`} key={p.id}>
+              <div
+                className={`project-cover ${p.association || p.role >= 4 ? "special" : ""}`}
+              >
+                <Icon
+                  name={
+                    p.role >= 4
+                      ? "trophy"
+                      : p.association === "bakaclub"
+                        ? "flower"
+                        : p.association === "arise"
+                          ? "code"
+                          : p.association === "lebarc"
+                            ? "coffee"
+                            : "projects"
+                  }
+                  size={34}
+                />
+                <span className="tag">
+                  {p.association
+                    ? names[p.association]
+                    : p.role >= 4
+                      ? "Campagne BdE"
+                      : "Vie associative"}
+                </span>
+                {g.completed.includes(p.id) && (
+                  <span className="completed-mark" title="Déjà accompli">
+                    <Icon name="check" size={16} />
+                  </span>
+                )}
               </div>
-            )}
-            {tab === "projets" && (
-              <>
-                <div className="section-title">
-                  <h2>De l’idée au « on l’a fait ».</h2>
+              <div className="project-body">
+                <h3>{p.name}</h3>
+                <p>{p.description}</p>
+                <div className="project-rewards">
                   <span>
-                    {g!.runs.filter((r) => r.endsAt > clock).length} /{" "}
-                    {g!.role >= 3 ? 2 : 1} PROJETS ACTIFS
+                    <Icon name="clock" size={15} />
+                    {seconds === 0 ? "Immédiat" : duration(seconds)}
+                  </span>
+                  <span>
+                    <Icon name="star" size={15} />+{reward} réputation
                   </span>
                 </div>
-                <div className="runs">
-                  {g!.runs.map((r) => (
-                    <article className="paper run" key={r.id}>
-                      <div>
-                        <span className="card-kicker">
-                          {r.endsAt <= clock ? "À RÉCUPÉRER" : "EN COURS"}
-                        </span>
-                        <h3>{r.name}</h3>
-                        <small>
-                          +{r.reputation} réputation ·{" "}
-                          {duration((r.endsAt - clock) / 1000)}
-                        </small>
-                      </div>
-                      <button
-                        className="primary"
-                        disabled={busy || retryAvailable || r.endsAt > clock}
-                        onClick={() => act({ type: "claim", id: r.id })}
-                      >
-                        Récupérer
-                      </button>
-                    </article>
-                  ))}
-                </div>
-                <label className="member-select">
-                  Équipier pour le prochain projet
-                  <select
-                    value={selectedMember}
-                    onChange={(e) => setSelectedMember(e.target.value)}
-                  >
-                    <option value="">Sans équipier</option>
-                    {c!.members
-                      .filter((m) => g!.members.includes(m.id))
-                      .map((m) => (
-                        <option
-                          key={m.id}
-                          value={m.id}
-                          disabled={g!.runs.some(
-                            (r) => r.member === m.id && r.endsAt > clock,
-                          )}
-                        >
-                          {m.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <div className="card-grid">
-                  {c!.projects
-                    .filter(
-                      (p) =>
-                        !p.association || p.association === g!.associationId,
-                    )
-                    .map((p) => {
-                      const member = c!.members.find(
-                        (m) => m.id === selectedMember,
-                      );
-                      const cost = Math.ceil(
-                        p.cost * (member?.effect === "cost" ? 0.9 : 1),
-                      );
-                      const seconds = Math.ceil(
-                        (p.seconds *
-                          (1 -
-                            (g!.associationId === "lebarc" ? 0.1 : 0) -
-                            (member?.effect === "time" ? 0.1 : 0))) /
-                          (snapshot.demo ? 3600 : 1),
-                      );
-                      const reputation = Math.round(
-                        p.reputation *
-                          (1 +
-                            (g!.associationId === "bakaclub" ? 0.1 : 0) +
-                            (member?.effect === "reputation" ? 0.1 : 0)),
-                      );
-                      const done =
-                        p.once &&
-                        (g!.completed.includes(p.id) ||
-                          g!.runs.some((r) => r.projectId === p.id));
-                      return (
-                        <article className="paper project" key={p.id}>
-                          <span className="card-kicker">
-                            {g!.role < p.role
-                              ? `Dès ${c!.roles[p.role].name}`
-                              : p.association
-                                ? names[p.association]
-                                : p.role >= 4
-                                  ? "OBJECTIF BdE"
-                                  : "TOUTES LES ASSOS"}
-                          </span>
-                          <h3>{p.name}</h3>
-                          <p>{p.description}</p>
-                          <div className="project-meta">
-                            <span>
-                              ◷ {seconds === 0 ? "Immédiat" : duration(seconds)}
-                            </span>
-                            <span>★ +{reputation}</span>
-                          </div>
-                          <button
-                            disabled={
-                              busy ||
-                              retryAvailable ||
-                              !!done ||
-                              g!.role < p.role ||
-                              g!.implication < cost * 1000 ||
-                              g!.runs.filter((r) => r.endsAt > clock).length >=
-                                (g!.role >= 3 ? 2 : 1) ||
-                              (!!selectedMember &&
-                                g!.runs.some(
-                                  (r) =>
-                                    r.member === selectedMember &&
-                                    r.endsAt > clock,
-                                ))
-                            }
-                            onClick={() =>
-                              act({
-                                type: "start",
-                                id: p.id,
-                                ...(selectedMember
-                                  ? { member: selectedMember }
-                                  : {}),
-                              })
-                            }
-                          >
-                            {done
-                              ? "Déjà lancé ou accompli ✓"
-                              : `Lancer · ${num(cost)} pts`}
-                          </button>
-                        </article>
-                      );
-                    })}
-                </div>
-              </>
-            )}
-            {tab === "equipe" && (
-              <>
-                <div className="section-title">
-                  <h2>Personne n’organise tout seul.</h2>
-                  <span>DÈS LE BUREAU D’ASSO</span>
-                </div>
-                <div className="card-grid">
-                  {c!.members.map((m, i) => (
-                    <article className="paper team-card" key={m.id}>
-                      <div className={`avatar avatar-${i}`}>
-                        {["▦", "✂", "☏"][i]}
-                      </div>
-                      <h3>{m.name}</h3>
-                      <p>{m.description}</p>
-                      <button
-                        disabled={
-                          busy ||
-                          retryAvailable ||
-                          g!.role < 2 ||
-                          g!.members.includes(m.id) ||
-                          g!.implication < m.cost * 1000
-                        }
-                        onClick={() => act({ type: "recruit", id: m.id })}
-                      >
-                        {g!.members.includes(m.id)
-                          ? "Dans ton équipe ✓"
-                          : `Recruter · ${m.cost} pts`}
-                      </button>
-                    </article>
-                  ))}
-                </div>
-                <p className="muted">
-                  Un équipier par projet. Choisis son affectation dans l’onglet
-                  Les projets.
-                </p>
-              </>
-            )}
-            {tab === "journal" && (
-              <div className="journal-grid">
-                <section className="paper">
-                  <p className="eyebrow">LE PETIT IMPRÉVU</p>
-                  {g!.event ? (
-                    (() => {
-                      const e = c!.events.find(
-                        (e) => e.id === g!.event!.definitionId,
-                      )!;
-                      return (
-                        <>
-                          <h2>{e.title}</h2>
-                          <p>{e.text}</p>
-                          {e.choices.map((choice, i) => (
-                            <button
-                              className="event-choice"
-                              key={i}
-                              disabled={busy || retryAvailable}
-                              onClick={() =>
-                                act({
-                                  type: "event",
-                                  id: g!.event!.id,
-                                  choice: i,
-                                })
-                              }
-                            >
-                              {choice.text}
-                              <small>
-                                {choice.reputation
-                                  ? `+${choice.reputation * (g!.role + 1)} réputation`
-                                  : `+${choice.implication * (g!.role + 1)} implication`}
-                              </small>
-                            </button>
-                          ))}
-                        </>
-                      );
-                    })()
+                <button
+                  className={`button ${reason ? "ghost" : "secondary"}`}
+                  disabled={!!reason || game.busy || !!game.failed}
+                  onClick={() =>
+                    game.act({
+                      type: "start",
+                      id: p.id,
+                      ...(member ? { member } : {}),
+                    })
+                  }
+                >
+                  {locked ? (
+                    <>
+                      <Icon name="lock" size={15} />À débloquer
+                    </>
+                  ) : done(p) ? (
+                    "Déjà lancé ou accompli"
                   ) : (
                     <>
-                      <h2>Pour une fois, tout roule.</h2>
-                      <p>
-                        Les imprévus arrivent au fil de ton aventure. Rien à
-                        surveiller : ils attendront ton retour.
-                      </p>
+                      Lancer<small>{num(cost)} pts</small>
+                      <Icon name="arrow" size={15} />
                     </>
                   )}
-                </section>
-                <section className="paper">
-                  <p className="eyebrow">LE CARNET DE BORD</p>
-                  <h2>Ça avance, cette histoire.</h2>
-                  {g!.journal.length ? (
-                    <ol className="journal">
-                      {g!.journal.map((entry, i) => (
-                        <li key={i}>
-                          <time>
-                            {new Date(entry.at).toLocaleString("fr-FR", {
-                              day: "numeric",
-                              month: "short",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </time>
-                          <p>{entry.text}</p>
-                        </li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p>Ta première action sera le début de l’histoire.</p>
-                  )}
-                </section>
+                </button>
+                <span className="button-reason">
+                  {reason ||
+                    (p.once
+                      ? "Une seule fois · un jalon de ton histoire"
+                      : "Rejouable · récompense garantie")}
+                </span>
               </div>
-            )}
-            {tab === "fiche" && (
-              <div className="journal-grid">
-                <section className="paper">
-                  <p className="eyebrow">TA FICHE D’IIENS</p>
-                  <h2>{profile.nickname}</h2>
-                  {editing ? (
-                    form
-                  ) : (
-                    <>
-                      <p className="association-title">
-                        {icons[profile.associationId]}{" "}
-                        {names[profile.associationId]}
-                      </p>
-                      <p className="presentation">{profile.presentation}</p>
-                      <button onClick={() => setEditing(true)}>
-                        Modifier ma présentation
-                      </button>
-                    </>
-                  )}
-                </section>
-                <section className="paper">
-                  <p className="eyebrow">LES VERSIONS DE TON HISTOIRE</p>
-                  <h2>Tu as fait du chemin.</h2>
-                  <button onClick={loadHistory}>Actualiser l’historique</button>
-                  {historyLoaded && history.length === 0 && (
-                    <p>
-                      La première version arrive. La réplication peut prendre
-                      quelques secondes.
-                    </p>
-                  )}
-                  {history.map((h) => (
-                    <article className="history-entry" key={h.submissionId}>
-                      <span className="card-kicker">
-                        VERSION {h.revision} ·{" "}
-                        {new Date(h.createdAt).toLocaleDateString("fr-FR")}
-                      </span>
-                      <h3>
-                        {h.nickname} · {names[h.associationId]}
-                      </h3>
-                      <p className="presentation">{h.presentation}</p>
-                    </article>
-                  ))}
-                </section>
-              </div>
-            )}
-            <footer>
-              Un jeu solo imaginé autour de l’ENSIIE. Scénarios fictifs,
-              motivation réelle.
-              <span>
-                Sauvegarde automatique · jusqu’à 24 h de gains hors ligne
-              </span>
-            </footer>
-          </>
-        )}
-      </main>
+            </article>
+          );
+        })}
+      </div>
+      {!shown.length && (
+        <div className="panel empty-state">
+          <Icon name="search" size={34} />
+          <h2>Aucun projet dans cette sélection.</h2>
+          <p>
+            {filter === "done"
+              ? "Tes premières réussites apparaîtront ici."
+              : "Essaie un autre filtre ou une recherche plus courte."}
+          </p>
+          <button
+            className="button secondary"
+            onClick={() => {
+              setSearch("");
+              setFilter("all");
+            }}
+          >
+            Voir tous les projets
+          </button>
+        </div>
+      )}
     </>
+  );
+}
+function Team({ game }: { game: GameController }) {
+  const s = game.snapshot!;
+  const g = s.game;
+  return (
+    <>
+      <div className="team-intro">
+        <span>
+          <Icon name="team" size={27} />
+        </span>
+        <div>
+          <strong>Un talent par projet. Un vrai coup de pouce.</strong>
+          <p>
+            Recrute dès le bureau d’asso, puis affecte tes équipiers dans Les
+            projets. Ils se libèrent dès la fin de leur mission.
+          </p>
+        </div>
+        <span className="tag">{g.members.length}/3 recrutés</span>
+      </div>
+      <div className="team-grid">
+        {s.catalog.members.map((m, i) => {
+          const owned = g.members.includes(m.id);
+          const run = g.runs.find(
+            (r) => r.member === m.id && r.endsAt > game.clock,
+          );
+          const reason =
+            g.role < 2
+              ? "Débloqué au bureau d’asso"
+              : game.estimate < m.cost
+                ? `Il te manque ${num(m.cost - game.estimate)} implication`
+                : "";
+          return (
+            <article className="team-card" key={m.id}>
+              <div className={`portrait portrait-${i}`}>
+                <svg viewBox="0 0 180 160" aria-hidden="true">
+                  <circle
+                    cx="90"
+                    cy="77"
+                    r="65"
+                    fill="currentColor"
+                    opacity=".12"
+                  />
+                  <path
+                    d="M40 160v-30c0-54 100-54 100 0v30"
+                    fill={["#8573bc", "#76958d", "#bd8666"][i]}
+                  />
+                  <rect
+                    x="79"
+                    y="92"
+                    width="22"
+                    height="25"
+                    rx="8"
+                    fill="#d9a483"
+                  />
+                  <ellipse
+                    cx="90"
+                    cy="67"
+                    rx="32"
+                    ry="37"
+                    fill={i === 1 ? "#b78263" : "#e5b28e"}
+                  />
+                  <path
+                    d={
+                      i === 1
+                        ? "M57 74C20 4 148 6 126 91l-15-34-46 6-4 30Z"
+                        : "M56 68C35 3 144 4 126 72l-14-24-48 10Z"
+                    }
+                    fill="#343148"
+                  />
+                  <path
+                    d="M78 74h1m23 0h1"
+                    stroke="#393144"
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M82 88q8 7 16 0"
+                    stroke="#8c584c"
+                    strokeWidth="2"
+                    fill="none"
+                  />
+                  {i === 0 && (
+                    <path
+                      d="M65 68h19v14H65Zm31 0h19v14H96Zm-12 4h12"
+                      stroke="#4b4755"
+                      strokeWidth="3"
+                      fill="none"
+                    />
+                  )}
+                </svg>
+                <span className="tag">
+                  {owned
+                    ? run
+                      ? "En mission"
+                      : "Dans ton équipe"
+                    : "À recruter"}
+                </span>
+              </div>
+              <div className="team-body">
+                <span className="eyebrow">
+                  {["ORGANISATION", "DÉBROUILLE", "RELATIONS"][i]}
+                </span>
+                <h2>{m.name}</h2>
+                <p>{m.description}</p>
+                {owned ? (
+                  <div className={`team-status ${run ? "working" : ""}`}>
+                    <span className="live-dot" />
+                    {run ? (
+                      <span>
+                        {run.name}
+                        <small>
+                          Libre dans{" "}
+                          {duration((run.endsAt - game.clock) / 1000)}
+                        </small>
+                      </span>
+                    ) : (
+                      "Disponible pour un projet"
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      className="button secondary"
+                      disabled={!!reason || game.busy || !!game.failed}
+                      onClick={() => game.act({ type: "recruit", id: m.id })}
+                    >
+                      Recruter<span>{num(m.cost)} pts</span>
+                    </button>
+                    <small className="button-reason">
+                      {reason || "Un recrutement, un bonus permanent"}
+                    </small>
+                  </>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+function Journal({ game }: { game: GameController }) {
+  const s = game.snapshot!;
+  const g = s.game;
+  const event = s.catalog.events.find((e) => e.id === g.event?.definitionId);
+  return (
+    <div className="journal-grid">
+      <section className="event-card">
+        <div className="event-illustration">
+          <span className="event-orbit" />
+          <Icon name={event ? "spark" : "coffee"} size={54} />
+          <span className="tag">
+            {event ? "À TOI DE DÉCIDER" : "TOUT ROULE"}
+          </span>
+        </div>
+        <div className="panel-body">
+          <span className="eyebrow">LES PETITES GALÈRES DU CAMPUS</span>
+          <h2>{event?.title || "Un moment de calme."}</h2>
+          <p>
+            {event?.text ||
+              "Les imprévus arrivent au fil de ton aventure. Ils attendront ton retour, pas besoin de surveiller."}
+          </p>
+          {event &&
+            event.choices.map((choice, i) => (
+              <button
+                className="event-choice"
+                key={i}
+                disabled={game.busy || !!game.failed}
+                onClick={() =>
+                  game.act({ type: "event", id: g.event!.id, choice: i })
+                }
+              >
+                <span>
+                  <strong>{choice.text}</strong>
+                  <small>
+                    {choice.reputation
+                      ? `+${choice.reputation * (g.role + 1)} réputation`
+                      : `+${choice.implication * (g.role + 1)} implication`}
+                  </small>
+                </span>
+                <Icon name="arrow" size={18} />
+              </button>
+            ))}
+        </div>
+      </section>
+      <section className="panel panel-body">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">LES COULISSES DE TA RÉUSSITE</span>
+            <h2>Le carnet de bord.</h2>
+          </div>
+          <Icon name="journal" size={25} />
+        </div>
+        {g.journal.length ? (
+          <ol className="journal">
+            {g.journal.map((entry, i) => (
+              <li key={`${entry.at}-${i}`}>
+                <span className="journal-pin" />
+                <time>
+                  {new Date(entry.at).toLocaleString("fr-FR", {
+                    day: "numeric",
+                    month: "short",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </time>
+                <p>{entry.text}</p>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <div className="empty-state">
+            <Icon name="journal" size={32} />
+            <p>
+              Une page blanche, plein d’idées.
+              <br />
+              Ta première action lancera l’histoire.
+            </p>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 createRoot(document.getElementById("root")!).render(<App />);

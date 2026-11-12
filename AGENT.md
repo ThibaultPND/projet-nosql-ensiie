@@ -28,6 +28,38 @@ Le changement d’asso, les succès cosmétiques, le nom de liste, le choix des 
 et les réponses au débat sont différés. Deux engagements fixes et le débat sont des
 projets jouables ; le nombre d’événements pourra passer de six à douze après validation.
 
+## Refonte UI/UX — direction retenue
+
+La première interface fonctionnelle a été remplacée par un tableau de bord de jeu,
+avec une scène associative illustrée, une palette encre/violet/citron et des
+composants cohérents. Cette refonte concerne la présentation et les interactions ;
+les règles économiques et la double persistance restent gérées par l’API existante.
+
+Ordre de travail et critères de la refonte :
+
+1. **Hiérarchie** : ressources en haut, navigation latérale sur ordinateur et fixe
+   en bas sur mobile ; le campus expose le clic, la prochaine promotion et une
+   action suggérée. Les améliorations futures sont masquées puis dépliables.
+2. **Organisation** : projets accessibles par défaut, recherche et filtres
+   rapides/campagne/accomplis/tous ; projets actifs et récompenses prêtes regroupés.
+   Chaque action bloquée indique son prérequis ou la ressource manquante.
+3. **Réactivité** : particules de clic, compteur interpolé entre deux réponses,
+   progression des missions, notifications de réussite et célébration des promotions.
+   Les chiffres interpolés sont purement visuels : l’API valide toujours les achats.
+4. **Fiabilité** : état d’envoi visible, reprise d’une réponse perdue avec la même
+   clé d’idempotence, formulaire désactivé pendant l’envoi et historique chargé à
+   l’ouverture. Les erreurs définitives ne bloquent pas la file d’actions suivante.
+5. **Accessibilité** : clic au clavier, recherche libellée, boutons de navigation
+   nommés, dialogues refermables par Échap avec gestion native du focus ; respect
+   de `prefers-reduced-motion` et préférence manuelle mémorisée dans le navigateur.
+6. **Vérification** : parcours Chromium avec les vraies bases, bureau et mobile,
+   recherche vide, verrouillages, dialogues, animations réduites et réponse réseau
+   perdue après une écriture effectivement acceptée par le serveur.
+
+Les illustrations et portraits sont des SVG locaux, sans dépendance à une image
+distante ni à une police externe. Les préférences d’animation sont locales ; les
+données de jeu continuent d’être sauvegardées côté serveur.
+
 ## Objectif
 
 Créer un clicker Web sur le thème de l’ENSIIE. On incarne un iiens qui commence

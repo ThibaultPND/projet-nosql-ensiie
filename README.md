@@ -22,6 +22,23 @@ MongoDB**. L’historique affiché dans le jeu est lu dans MongoDB.
   et vérification du lancement Compose depuis un clone neuf. Aucun dépôt distant
   ou serveur n’a été créé automatiquement.
 
+## Interface et interactions
+
+Le campus rassemble le bouton principal, la prochaine promotion et une suggestion
+pour avancer. La barre de ressources reste visible ; la navigation passe en bas de
+l’écran sur mobile. Les projets se filtrent par disponibilité, durée, campagne ou
+réalisation, et une recherche permet de retrouver une mission rapidement.
+
+Les clics réagissent immédiatement, les projets affichent leur progression et les
+promotions sont célébrées dans un dialogue. Le compteur d’implication est une
+estimation animée entre les confirmations du serveur : aucune ressource n’est
+attribuée par le navigateur. Une réponse perdue peut être rejouée avec la même clé,
+sans doubler les gains. Les raisons des verrouillages sont affichées sur les cartes.
+
+Les animations respectent la préférence système. Elles peuvent aussi être réduites
+avec le bouton en bas de la navigation sur ordinateur, ou dans **Ma fiche** sur
+mobile. Les illustrations sont des SVG embarqués, sans ressource externe à charger.
+
 ## Jouer sans Docker sur cette machine
 
 Prérequis : npm et un environnement Linux/macOS compatible avec les binaires de
@@ -192,7 +209,8 @@ npm run simulate
   aussi redémarrés avec les mêmes données. Les données temporaires de PostgreSQL restent
   dans un dossier `cliicker-test-*` sous le répertoire temporaire du système.
 - `test:browser` : nécessite Chromium (`/usr/bin/chromium` par défaut, personnalisable
-  par `CHROMIUM_PATH`). Création, jeu, modification, historique, rechargement et mobile.
+  par `CHROMIUM_PATH`). Création, jeu, modification, historique, rechargement, filtres, recherche, dialogues,
+  mobile, animations réduites et reprise après perte de réponse réseau.
   Captures dans `test-results/`, ignoré par Git. Exécuter `build` avant.
 - `simulate` : stratégie automatique avec 1, 3 ou 12 passages par jour. Résultats
   initiaux : 14–16 jours, 7–8 jours et 4,7–5,4 jours respectivement. Cela teste la
